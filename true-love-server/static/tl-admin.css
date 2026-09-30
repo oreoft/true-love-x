@@ -190,10 +190,10 @@ td.wrap { max-width: 320px; overflow-wrap: anywhere; }
     .jump { right: 12px; bottom: 16px; }
     .modal { padding: 16px; }
     main { padding: 16px; }
-    .chat { grid-template-columns: 1fr; height: auto; }
+    .chat { grid-template-columns: 1fr; grid-template-rows: auto 1fr; height: auto; min-height: 0; }
     .conv-list { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
     .conv { width: auto; min-width: 140px; border-bottom: 0; border-right: 1px solid var(--line); }
-    .msgs { height: 60vh; }
+    .msgs { flex: none; height: 60vh; }
     .top { padding: 10px 16px; }
     .log { grid-template-columns: 1fr; gap: 0; }
 }
