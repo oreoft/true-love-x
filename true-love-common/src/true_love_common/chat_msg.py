@@ -108,7 +108,9 @@ class ChatMsg:
 
     # 收到这条消息的机器人（微信是它的 wxid），server 和 AI 按它区分数据、决定从哪个号回复
     bot_id: str = ""
-    # 正文里叫到机器人的那段文字（如 "@真爱粉"），没叫到为空
+    # 收到这条消息的机器人的账号昵称，由 base 从微信读；AI 用它当自己的名字
+    bot_name: str = ""
+    # 正文里叫到机器人的那段文字（如 "@昵称"），没叫到为空
     mention: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -136,5 +138,6 @@ class ChatMsg:
             link_msg=LinkMsg.from_dict(data["link_msg"]) if data.get("link_msg") else None,
             refer_msg=cls.from_dict(data["refer_msg"]) if data.get("refer_msg") else None,
             bot_id=data.get("bot_id", ""),
+            bot_name=data.get("bot_name", ""),
             mention=data.get("mention", ""),
         )

@@ -62,6 +62,7 @@ def convert_message(raw_msg: Any, chat_name: str, *, bot_id: str = "", bot_name:
             is_at_me=is_at_me,
             content=content,
             bot_id=bot_id,
+            bot_name=bot_name,
             mention=mention,
         )
 
@@ -109,6 +110,7 @@ def convert_message(raw_msg: Any, chat_name: str, *, bot_id: str = "", bot_name:
             chat_name=chat_name,
             content=str(raw_msg),
             bot_id=bot_id,
+            bot_name=bot_name,
         )
 
 

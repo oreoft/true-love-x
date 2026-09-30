@@ -68,6 +68,10 @@ class MentionTests(unittest.TestCase):
 
         self.assertEqual(msg.bot_id, "win11-ser")
 
+    def test_every_message_carries_the_account_nickname_for_the_ai(self):
+        self.assertEqual(self.convert(message("hello")).bot_name, "kun jr")
+        self.assertEqual(self.convert(object()).bot_name, "kun jr")
+
 
 if __name__ == "__main__":
     unittest.main()
