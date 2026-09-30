@@ -148,6 +148,9 @@ td.wrap { max-width: 320px; overflow-wrap: anywhere; }
 .log .lv-ERROR { color: var(--bad); }
 .log .lv-WARNING, .log .lv-WARN { color: var(--warn); }
 
+.jump { position: fixed; right: 20px; bottom: 24px; display: flex; flex-direction: column; gap: 8px; z-index: 10; }
+.jump .btn { width: 40px; height: 40px; border-radius: 50%; padding: 0; font-size: 18px; box-shadow: 0 4px 14px rgba(0, 0, 0, .12); }
+
 /* 弹窗和提示 */
 .modal-back { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); display: flex; align-items: center; justify-content: center;
     padding: 16px; z-index: 20; }

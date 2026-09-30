@@ -34,7 +34,8 @@ export async function show(root, ctx) {
     const loader = $('#loader', root);
 
     const load = async (fresh) => {
-        if (state.loading || (!fresh && !state.hasMore)) return;
+        // 重新加载时不等正在进行的翻页，旧请求的结果按 seq 丢掉
+        if (!fresh && (state.loading || !state.hasMore)) return;
         if (fresh) {
             state.seq += 1;
             state.nextBeforeNs = '';
@@ -90,6 +91,22 @@ export async function show(root, ctx) {
         if (document.body.scrollHeight - (window.scrollY + window.innerHeight) < LOAD_THRESHOLD) load(false);
     };
     window.addEventListener('scroll', onScroll, { passive: true });
+
+    // 右下角的上下箭头：往下翻了很多页以后，一键回到顶部并拉最新的日志；向下箭头到底部并加载更早的一页
+    const jump = document.createElement('div');
+    jump.className = 'jump';
+    jump.innerHTML = '<button class="btn" id="jumpTop" aria-label="回到顶部并刷新">↑</button>'
+        + '<button class="btn" id="jumpBottom" aria-label="到底部并加载更早的日志">↓</button>';
+    document.body.appendChild(jump);
+    $('#jumpTop', jump).onclick = () => { window.scrollTo({ top: 0 }); load(true); };
+    $('#jumpBottom', jump).onclick = () => {
+        window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+        load(false);
+    };
+
     load(true);
-    return () => window.removeEventListener('scroll', onScroll);
+    return () => {
+        window.removeEventListener('scroll', onScroll);
+        jump.remove();
+    };
 }
