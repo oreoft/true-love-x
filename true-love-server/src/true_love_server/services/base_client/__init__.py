@@ -24,6 +24,8 @@ from ._lark import LarkBaseClient
 
 __all__ = ["BaseClient", "WeChatBaseClient", "LarkBaseClient", "get_base_client", "get_wechat_client"]
 
+from true_love_common.hosts import bot_hosts, machine_bot_id
+
 from ... import Config
 
 # ==================== 平台注册表（新增平台只需在此加一行）====================
@@ -37,12 +39,14 @@ _REGISTRY: dict[str, type[BaseClient]] = {
 def get_base_client(platform: str = "wechat") -> BaseClient:
     """根据平台名称返回对应的 BaseClient 实例。"""
     cfg = Config()
-    base_server: dict = cfg.BASE_SERVER or {}
     if platform not in _REGISTRY:
         raise ValueError(f"未注册的平台: {platform}")
 
-    hosts = base_server.get("hosts", {}) or {}
-    host = hosts.get(platform) or (base_server.get("host", "") if platform == "wechat" else "")
+    # 微信 base 的地址登记在 true_love_common.hosts；飞书 base 在配置文件里
+    if platform == "wechat":
+        host = bot_hosts(machine_bot_id()).base
+    else:
+        host = ((cfg.BASE_SERVER or {}).get("hosts") or {}).get(platform, "")
     if not host:
         raise ValueError(f"base_server.hosts.{platform} 未配置")
 

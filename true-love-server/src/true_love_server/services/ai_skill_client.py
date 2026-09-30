@@ -6,18 +6,12 @@ AI Skill Client - 调用 AI 服务的动态技能管理 API
 """
 import logging
 
+from true_love_common.hosts import ai_host
 from true_love_common.http.client import async_post_json
 
 from ..core import Config
 
 LOG = logging.getLogger("AiSkillClient")
-
-
-def _ai_url() -> str:
-    url = (Config().AI_SERVICE or {}).get("host", "").rstrip("/")
-    if not url:
-        raise RuntimeError("AI_SERVICE.host 未配置")
-    return url
 
 
 def _token() -> str:
@@ -27,7 +21,7 @@ def _token() -> str:
 
 async def list_skills() -> list[dict]:
     result = await async_post_json(
-        f"{_ai_url()}/skill/list",
+        f"{ai_host()}/skill/list",
         {"token": _token()},
         timeout=10.0,
     )
@@ -43,7 +37,7 @@ async def save_skill(skill_id: str, name: str, description: str,
                      command: str, parameters: str | None,
                      permissions=None) -> dict:
     result = await async_post_json(
-        f"{_ai_url()}/skill/save",
+        f"{ai_host()}/skill/save",
         {
             "token": _token(),
             "id": skill_id,
@@ -66,7 +60,7 @@ async def save_skill(skill_id: str, name: str, description: str,
 
 async def delete_skill(skill_id: str) -> dict:
     result = await async_post_json(
-        f"{_ai_url()}/skill/delete",
+        f"{ai_host()}/skill/delete",
         {"token": _token(), "id": skill_id},
         timeout=10.0,
     )

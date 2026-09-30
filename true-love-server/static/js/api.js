@@ -115,13 +115,5 @@ window.api = {
         method: 'POST',
         body: JSON.stringify({ id })
     }),
-
-    // Settings API
-    fetchSettings: () => apiRequest('/admin/settings'),
-
-    updateSetting: (key, value) => apiRequest('/admin/settings/update', {
-        method: 'POST',
-        body: JSON.stringify({ key, value })
-    }),
 };
 

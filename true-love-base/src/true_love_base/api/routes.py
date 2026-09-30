@@ -12,7 +12,9 @@ from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
 from true_love_base.models.api import ApiErrors, ApiResponse
-from true_love_base.utils.path_resolver import resolve_path
+from true_love_common.media import download
+
+from true_love_base.utils.path_resolver import SEND_FILES_DIR
 
 if TYPE_CHECKING:
     from true_love_base.services.robot import Robot
@@ -104,7 +106,7 @@ async def send_file(request: dict[str, Any] | None = Body(default=None)) -> dict
     Request Body:
         - sendReceiver: 接收者
         - is_master: 为 true 时发给这台机器的管理员，忽略 sendReceiver（可选）
-        - path: 文件路径，相对 base 工作目录（如 wx_imgs/xxx.jpg、moyu-jpg/xxx.jpg），文件必须存在
+        - url: 文件的下载地址，base 先下载到 send-files/ 再发送
     """
     robot = _get_robot()
     unavailable = _unavailable(robot)
@@ -114,19 +116,19 @@ async def send_file(request: dict[str, Any] | None = Body(default=None)) -> dict
     data = _payload(request)
     if data.get("is_master") and not robot.master:
         return ApiErrors.NO_MASTER.to_dict()
-    path = data.get("path", "")
+    url = data.get("url", "")
     receiver = _receiver(robot, data)
 
-    if not receiver or not path:
+    if not receiver or not url:
         return ApiErrors.INVALID_PARAMS.to_dict()
 
     try:
-        resolved_path = resolve_path(path)
-    except FileNotFoundError as e:
-        LOG.error("Failed to send file to [%s]: %s", receiver, e)
+        path = await download(url, SEND_FILES_DIR)
+    except Exception as e:
+        LOG.error("Failed to download file for [%s]: %s", receiver, e)
         return ApiErrors.SEND_FAILED.to_dict()
 
-    success = await _run_wx_operation(robot.send_file_msg, resolved_path, receiver)
+    success = await _run_wx_operation(robot.send_file_msg, path, receiver)
     if success:
         return ApiResponse.success().to_dict()
     return ApiErrors.SEND_FAILED.to_dict()

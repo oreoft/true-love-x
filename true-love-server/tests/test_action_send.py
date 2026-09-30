@@ -23,7 +23,9 @@ class ActionSendTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.send_text = AsyncMock(return_value=(True, ""))
         self.send_to_master = AsyncMock(return_value=(True, ""))
-        base_client = types.SimpleNamespace(send_text=self.send_text, send_to_master=self.send_to_master)
+        self.send_file = AsyncMock(return_value=(True, ""))
+        base_client = types.SimpleNamespace(
+            send_text=self.send_text, send_to_master=self.send_to_master, send_file=self.send_file)
         dependencies = {
             "true_love_server": module("true_love_server", SOURCE, Config=Mock()),
             "true_love_server.api": module("true_love_server.api", SOURCE / "api"),
@@ -38,6 +40,15 @@ class ActionSendTests(unittest.IsolatedAsyncioTestCase):
         modules.start()
         self.addCleanup(modules.stop)
         self.routes = importlib.import_module("true_love_server.api.action_routes")
+        ai = patch.object(self.routes, "ai_host", lambda: "http://ai.test:8088")
+        ai.start()
+        self.addCleanup(ai.stop)
+
+    async def test_generated_file_is_handed_to_base_as_a_url_on_ai(self):
+        await self.routes.action_send_file(
+            {"token": "token", "receiver": "委员会", "path": "gen_img/abc.jpg", "platform": "wechat"})
+
+        self.send_file.assert_awaited_once_with("http://ai.test:8088/media/gen_img/abc.jpg", "委员会", platform="wechat")
 
     async def test_reply_goes_to_the_chat_it_answers(self):
         await self.routes.action_send(

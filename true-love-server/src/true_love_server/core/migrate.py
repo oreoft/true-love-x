@@ -9,41 +9,14 @@ Server DB 当前 Migration
 import sqlite3
 
 
-def _cols(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-
-
-# 多平台支持迁移
-VERSION = "001"
-DESCRIPTION = "multi_platform: add platform/sender_id/sender_name/chat_name, drop sender"
+# 后台设置页已删除：唯一的设置项"本机回调地址"改由 true_love_common.hosts 按机器人登记
+VERSION = "003"
+DESCRIPTION = "settings: drop the settings table"
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """多平台支持：新增 platform/sender_id/sender_name/chat_name，回填，删旧列，建索引"""
-    existing = _cols(conn, "group_messages")
-
-    for col, typedef in [
-        ("platform",    "VARCHAR(32)  NOT NULL DEFAULT 'wechat'"),
-        ("sender_id",   "VARCHAR(128) NOT NULL DEFAULT ''"),
-        ("sender_name", "VARCHAR(128) NOT NULL DEFAULT ''"),
-        ("chat_name",   "VARCHAR(128) NOT NULL DEFAULT ''"),
-    ]:
-        if col not in existing:
-            conn.execute(f"ALTER TABLE group_messages ADD COLUMN {col} {typedef}")
-
-    if "sender" in existing:
-        conn.execute("UPDATE group_messages SET sender_id   = sender WHERE sender_id   = ''")
-        conn.execute("UPDATE group_messages SET sender_name = sender WHERE sender_name = ''")
-    conn.execute("UPDATE group_messages SET chat_name = chat_id WHERE chat_name = ''")
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_platform_chat ON group_messages (platform, chat_id)"
-    )
-
-    if "sender" in _cols(conn, "group_messages"):
-        # ix_group_messages_sender 索引引用了 sender 列，必须先删索引才能删列
-        conn.execute("DROP INDEX IF EXISTS ix_group_messages_sender")
-        conn.execute("ALTER TABLE group_messages DROP COLUMN sender")
+    """删掉不再使用的 settings 表"""
+    conn.execute("DROP TABLE IF EXISTS settings")
 
 
 def run(db_path: str) -> None:

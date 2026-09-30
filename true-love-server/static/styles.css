@@ -1396,30 +1396,7 @@ body {
     font-size: 12px;
 }
 
-/* ==================== Settings ==================== */
-
-.settings-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.settings-item {
-    background: white;
-    border-radius: 10px;
-    padding: 16px 20px;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-}
-
-.settings-unset {
-    margin-left: 8px;
-    padding: 1px 8px;
-    border-radius: 10px;
-    background: #fef3c7;
-    color: #92400e;
-    font-size: 12px;
-    font-weight: 500;
-}
+/* ==================== 表单里的多行输入 ==================== */
 
 .settings-rows {
     border: 1px solid #e5e7eb;
@@ -1497,13 +1474,6 @@ body {
     font-size: 12px;
     color: #6b7280;
     line-height: 1.5;
-}
-
-.settings-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 12px;
 }
 
 /* ==================== Schedule（提醒 + 定时任务） ==================== */

@@ -3,10 +3,9 @@
 
 # ==================== 服务基础配置 ====================
 
-# host: the server AI calls back when a trigger does not say where to reply (one server, or the main one).
-#       Servers that share this AI send their own address with every trigger, set in their admin console.
+# lark_host: the Lark base. WeChat base and server addresses live in true_love_common/hosts.py:
+#            AI replies through the server of the bot that received the message (msg.bot_id).
 base_server:
-  host: "http://localhost:8088"
   lark_host: ""
 
 http:

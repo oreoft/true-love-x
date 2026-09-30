@@ -16,8 +16,6 @@ import yaml
 
 from true_love_common.observability.logging import LoggingConfig
 
-DEFAULT_SERVER_HOST = "http://host.docker.internal:8088"
-
 
 class Config:
     """
@@ -47,16 +45,12 @@ class Config:
         self.machine_name = socket.gethostname().lower()
         self.master_wix = self._find_master(self.config.get("master_wix"), self.machine_name)
         self.http_token = self.config["http_token"]
-
-        # Server 服务地址（默认与 base 同机，server 跑在 Docker Desktop 里）
-        self.server_host = (self.config.get("server") or {}).get("host") or DEFAULT_SERVER_HOST
         
         Config._initialized = True
         
         # 日志确认配置加载
         LOG = logging.getLogger("Config")
         LOG.info(f"Config loaded: machine_name={self.machine_name}, master_wix={self.master_wix}")
-        LOG.info(f"Config loaded: server_host={self.server_host}")
     
     def _setup_logging(self) -> None:
         """设置日志系统（从配置文件读取 Loki 配置）"""

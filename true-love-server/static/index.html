@@ -49,12 +49,6 @@
                     >
                         ⚙️ 技能
                     </button>
-                    <button
-                        :class="['btn', 'btn-sm', activeTab === 'settings' ? 'btn-primary' : 'btn-outline-light']"
-                        @click="switchTab('settings')"
-                    >
-                        🛠 设置
-                    </button>
                 </div>
             </div>
         </header>
@@ -431,70 +425,6 @@
             </div>
         </template>
 
-        <!-- Settings Page -->
-        <template v-else-if="activeTab === 'settings'">
-            <!-- Summary Bar -->
-            <div class="summary-bar">
-                <div class="summary-content">
-                    <div class="summary-stats">
-                        <div class="stat-item">
-                            <span class="stat-label">未设置</span>
-                            <span class="stat-value">{{ settings.filter(isSettingEmpty).length }}</span>
-                        </div>
-                    </div>
-                    <button class="btn btn-outline btn-sm" @click="fetchSettings" :disabled="settingsLoading">
-                        {{ settingsLoading ? '刷新中...' : '刷新' }}
-                    </button>
-                </div>
-            </div>
-
-            <!-- List -->
-            <div class="list-container">
-                <div class="list-header">
-                    <span class="list-title">这台 server 的设置，保存后立即生效</span>
-                </div>
-
-                <div v-if="settingsLoading && settings.length === 0" class="loading">
-                    <div class="spinner"></div>
-                    <p>加载中...</p>
-                </div>
-
-                <div v-else class="settings-list">
-                    <div v-for="item in settings" :key="item.key" class="settings-item">
-                        <div class="form-field">
-                            <label :for="'setting-' + item.key">
-                                {{ item.label }}
-                                <span v-if="isSettingEmpty(item)" class="settings-unset">未设置</span>
-                            </label>
-                            <input
-                                :id="'setting-' + item.key"
-                                v-model="item.draft"
-                                class="modal-input"
-                                placeholder="http://机器名:8088"
-                            />
-                            <p class="settings-hint">{{ item.hint }}</p>
-                        </div>
-                        <div class="settings-actions">
-                            <button
-                                class="btn btn-outline btn-sm"
-                                @click="resetSetting(item)"
-                                :disabled="item.saving || !isSettingChanged(item)"
-                            >
-                                撤销
-                            </button>
-                            <button
-                                class="btn btn-primary btn-sm"
-                                @click="saveSetting(item)"
-                                :disabled="item.saving || !isSettingChanged(item)"
-                            >
-                                {{ item.saving ? '保存中...' : '保存' }}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </template>
-
         <!-- Reminder / Task Add Modal -->
         <div v-if="addModal.show" class="modal-overlay" @click.self="addModal.show = false">
             <div class="modal">
@@ -744,7 +674,6 @@
     <script src="/static/js/useLokiLogs.js"></script>
     <script src="/static/js/useReminderPage.js"></script>
     <script src="/static/js/useSkillPage.js"></script>
-    <script src="/static/js/useSettingsPage.js"></script>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

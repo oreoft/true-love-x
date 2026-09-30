@@ -86,7 +86,7 @@ async def generate_image(params: dict, ctx: dict) -> str:
         "description": (
                 "分析图片内容，回答关于图片的问题。"
                 "当用户发送图片（消息中含 [图片:...] 或 [引用图片:...]）并要求分析或提问时使用。"
-                "从消息中提取图片路径传入 image_path，路径原样使用，如 wx_imgs/xxx.jpg 或 img_v3_xxx.jpg。"
+                "从消息中提取图片路径传入 image_path，路径原样使用，如 http://h-m8s:5000/media/wx_imgs/xxx.jpg 或 img_v3_xxx.jpg。"
         ),
         "parameters": {
             "type": "object",
@@ -97,7 +97,7 @@ async def generate_image(params: dict, ctx: dict) -> str:
                 },
                 "image_path": {
                     "type": "string",
-                    "description": "图片文件路径，原样从消息中提取，如 wx_imgs/xxx.jpg 或 img_v3_xxx.jpg"
+                    "description": "图片文件路径，原样从消息中提取，如 http://h-m8s:5000/media/wx_imgs/xxx.jpg 或 img_v3_xxx.jpg"
                 }
             },
             "required": ["question", "image_path"]
@@ -150,7 +150,7 @@ async def analyze_image(params: dict, ctx: dict) -> str:
             "properties": {
                 "image_path": {
                     "type": "string",
-                    "description": "原始图片路径，原样从消息中提取，如 wx_imgs/xxx.jpg 或 img_v3_xxx.jpg"
+                    "description": "原始图片路径，原样从消息中提取，如 http://h-m8s:5000/media/wx_imgs/xxx.jpg 或 img_v3_xxx.jpg"
                 },
                 "prompt": {
                     "type": "string",

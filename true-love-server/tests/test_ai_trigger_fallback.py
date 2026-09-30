@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from true_love_common.chat_msg import ChatMsg
+from true_love_common.chat_msg import ChatMsg, ImageMsg, ResourceRef
 from true_love_common.http.client import HttpResult
 
 
@@ -31,8 +31,7 @@ def ai_response(status_code=200, data=None):
 
 class RoutesCase(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        config = types.SimpleNamespace(AI_SERVICE={"host": "http://ai.test"}, HTTP_TOKEN=["token"])
-        self.settings = {"reply_to": ""}
+        config = types.SimpleNamespace(HTTP_TOKEN=["token"])
         self.repository = Mock()
         self.repository.save.return_value = True
         session = Mock()
@@ -54,8 +53,6 @@ class RoutesCase(unittest.IsolatedAsyncioTestCase):
                 "true_love_server.services.loki_client", get_loki_client=Mock()),
             "true_love_server.services.reminder_service": module("true_love_server.services.reminder_service"),
             "true_love_server.services.task_service": module("true_love_server.services.task_service"),
-            "true_love_server.services.settings_service": module(
-                "true_love_server.services.settings_service", get=lambda key: self.settings[key]),
         }
         modules = patch.dict(sys.modules, dependencies)
         modules.start()
@@ -69,6 +66,9 @@ class RoutesCase(unittest.IsolatedAsyncioTestCase):
             patch.object(self.routes.base_client, "send_text", self.send_text),
             patch.object(self.routes.base_client, "send_to_master", self.send_to_master, create=True),
             patch.object(self.routes, "post_json", self.post_json),
+            patch.object(self.routes, "ai_host", lambda: "http://ai.test"),
+            patch.object(self.routes, "machine_bot_id", lambda: "win10-m8s"),
+            patch.object(self.routes, "bot_hosts", lambda bot_id: types.SimpleNamespace(base=f"http://{bot_id}-base:5000")),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -106,31 +106,40 @@ class AiTriggerFallbackTests(RoutesCase):
         self.post_json.assert_called_once()
         self.send_text.assert_not_awaited()
 
-    async def test_trigger_tells_ai_which_server_to_send_the_reply_to(self):
-        self.settings["reply_to"] = "http://server-b.test:8088"
-
+    async def test_trigger_goes_to_the_ai_address(self):
         await self.routes._handle_incoming_message(ChatMsg(sender_id="alice"))
 
-        payload = self.post_json.call_args.args[1]
-        self.assertEqual(payload["reply_to"], "http://server-b.test:8088")
+        self.assertEqual(self.post_json.call_args.args[0], "http://ai.test/trigger")
 
-    async def test_reply_address_changed_in_the_console_applies_to_the_next_message(self):
-        self.settings["reply_to"] = "http://old.test:8088"
-        await self.routes._handle_incoming_message(ChatMsg(sender_id="alice"))
-        self.settings["reply_to"] = "http://new.test:8088"
+    async def test_ai_learns_which_bot_the_message_came_from(self):
+        await self.routes._handle_incoming_message(ChatMsg(sender_id="alice", bot_id="win11-ser"))
 
-        await self.routes._handle_incoming_message(ChatMsg(sender_id="bob"))
+        self.assertEqual(self.post_json.call_args.args[1]["msg"]["bot_id"], "win11-ser")
 
-        self.assertEqual(
-            [call.args[1]["reply_to"] for call in self.post_json.call_args_list],
-            ["http://old.test:8088", "http://new.test:8088"],
-        )
+    async def test_lark_message_without_a_bot_is_answered_through_this_server(self):
+        await self.routes._handle_incoming_message(ChatMsg(sender_id="alice", platform="lark"))
 
-    async def test_server_without_a_reply_address_leaves_the_choice_to_ai(self):
-        await self.routes._handle_incoming_message(ChatMsg(sender_id="alice"))
+        self.assertEqual(self.post_json.call_args.args[1]["msg"]["bot_id"], "win10-m8s")
 
-        payload = self.post_json.call_args.args[1]
-        self.assertNotIn("reply_to", payload)
+    async def test_wechat_media_is_handed_to_ai_as_a_url_on_the_base_that_received_it(self):
+        image = ImageMsg(resource=ResourceRef(ref="wx_imgs/a.jpg"))
+        quoted = ChatMsg(msg_type="image", image_msg=ImageMsg(resource=ResourceRef(ref="wx_imgs/b.jpg")))
+        msg = ChatMsg(sender_id="alice", msg_type="image", image_msg=image, refer_msg=quoted, bot_id="win11-ser")
+
+        await self.routes._handle_incoming_message(msg)
+
+        sent = self.post_json.call_args.args[1]["msg"]
+        self.assertEqual(sent["image_msg"]["resource"],
+                         {"ref": "http://win11-ser-base:5000/media/wx_imgs/a.jpg", "source": "http"})
+        self.assertEqual(sent["refer_msg"]["image_msg"]["resource"]["ref"],
+                         "http://win11-ser-base:5000/media/wx_imgs/b.jpg")
+
+    async def test_lark_media_is_passed_through_untouched(self):
+        image = ImageMsg(resource=ResourceRef(ref="img_v3_key"))
+        await self.routes._handle_incoming_message(
+            ChatMsg(sender_id="alice", platform="lark", msg_type="image", image_msg=image))
+
+        self.assertEqual(self.post_json.call_args.args[1]["msg"]["image_msg"]["resource"]["ref"], "img_v3_key")
 
     async def test_plain_group_message_never_triggers_ai(self):
         await self.routes._handle_incoming_message(ChatMsg(sender_id="alice", chat_id="room", is_group=True))

@@ -10,6 +10,7 @@ import contextvars
 import logging
 from contextlib import contextmanager
 
+from true_love_common.hosts import AI_NOTICE_BOT, server_host
 from true_love_common.http.client import async_get, async_post_json, post_json
 
 from true_love_ai.core.config import get_config
@@ -17,30 +18,22 @@ from true_love_ai.core.config import get_config
 LOG = logging.getLogger("ServerClient")
 
 
-# 当前这次处理要回调的 server 地址。多套 server 共用一个 AI 时由 /trigger 带来
-_reply_to: contextvars.ContextVar[str] = contextvars.ContextVar("reply_to", default="")
+# 当前这次处理的消息来自哪个机器人，回调发到它的 server；不在处理消息时（如启动通知）用 AI_NOTICE_BOT
+_bot_id: contextvars.ContextVar[str] = contextvars.ContextVar("bot_id", default=AI_NOTICE_BOT)
 
 
 @contextmanager
-def reply_through(url):
-    """
-    这段代码里（包括它派生的任务）的回调都发往指定的 server
-
-    Args:
-        url: server 地址；为空或不是 http(s) 地址时用配置里的默认 server
-    """
-    valid = isinstance(url, str) and url.startswith(("http://", "https://"))
-    if url and not valid:
-        LOG.warning("Ignoring reply address that is not a web address: %r", url)
-    token = _reply_to.set(url.rstrip("/") if valid else "")
+def replying_for(bot_id: str):
+    """这段代码里（包括它派生的任务）的回调都发往 bot_id 这个机器人的 server"""
+    token = _bot_id.set(bot_id)
     try:
         yield
     finally:
-        _reply_to.reset(token)
+        _bot_id.reset(token)
 
 
 def _get_server_url() -> str:
-    return _reply_to.get() or get_config().base_server.host.rstrip("/")
+    return server_host(_bot_id.get())
 
 
 def _get_token() -> str:
@@ -145,26 +138,18 @@ async def listen_remove(chat_name: str) -> dict:
 
 # ==================== 媒体文件获取 ====================
 
-def _get_media_host(platform: str) -> str:
-    cfg = get_config().base_server
-    if platform == "lark":
-        return cfg.lark_host.rstrip("/")
-    return _get_server_url()
-
-
 async def fetch_media_bytes(ref: str, platform: str = "wechat", timeout: float = 15.0) -> bytes | None:
     """拉取入站媒体原始字节。
 
-    ref 是 http(s) 时直接拉取；否则按 platform 走对应 media host 的 /media/{ref}。
+    微信的媒体 server 已经换成了 base 的 URL；飞书的是飞书 base 上的相对路径。
     """
-    if ref.startswith("http://") or ref.startswith("https://"):
+    if ref.startswith(("http://", "https://")):
         url = ref
+    elif platform == "lark" and get_config().base_server.lark_host:
+        url = f"{get_config().base_server.lark_host.rstrip('/')}/media/{ref.lstrip('/')}"
     else:
-        media_host = _get_media_host(platform)
-        if not media_host:
-            LOG.error("fetch_media_bytes: media host 未配置 platform=%s", platform)
-            return None
-        url = f"{media_host}/media/{ref.lstrip('/')}"
+        LOG.error("fetch_media_bytes: 无法下载的媒体引用 ref=%s platform=%s", ref, platform)
+        return None
     result = await async_get(url, timeout=timeout)
     if not result.ok:
         LOG.error("fetch_media_bytes 失败: ref=%s platform=%s err=%s", ref, platform, result.error or result.text)

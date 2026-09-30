@@ -12,7 +12,6 @@ from sqlalchemy.orm import sessionmaker, Session
 from . import migrate
 from ..models.group_message import Base
 from ..models.schema_migration import SchemaMigration  # noqa: F401 — 确保 create_all() 能建表
-from ..models.setting import Setting  # noqa: F401 — 确保 create_all() 能建表
 from ..models.listen_chat import ListenChat  # noqa: F401 — 确保 create_all() 能建表
 
 LOG = logging.getLogger("DBEngine")

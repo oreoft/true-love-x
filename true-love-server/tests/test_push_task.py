@@ -21,7 +21,7 @@ def module(name, path=None, **attributes):
 
 class PushTests(unittest.TestCase):
     def setUp(self):
-        config = types.SimpleNamespace(ALAPI={"token": "token"}, AI_SERVICE={}, HTTP_TOKEN=["token"])
+        config = types.SimpleNamespace(ALAPI={"token": "token"}, HTTP_TOKEN=["token"])
         self.send_text = AsyncMock(return_value=(True, ""))
         self.send_img = AsyncMock(return_value=(True, ""))
         base_client = types.SimpleNamespace(

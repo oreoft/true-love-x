@@ -9,6 +9,8 @@ AI 侧 Agent 执行 skill 后，通过这些接口操作 WeChat（发消息、�
 import logging
 
 from fastapi import APIRouter
+from true_love_common.hosts import ai_host
+from true_love_common.media import to_url
 
 from .deps import verify_token
 from .exception_handlers import ApiResponse, ValidationException
@@ -74,8 +76,7 @@ async def action_send_file(request: dict):
         - receiver: 接收者
         - platform: 目标平台 "wechat"(默认) | "lark"
         - path:     AI 生成文件的相对路径，如 gen_img/abc.jpg、gen_video/abc.mp4
-                    Server 用配置的 ai_host 拼出完整 URL；
-                    WeChat 下载到共享本地目录后发送，Lark 直接透传 URL。
+                    Server 拼成 AI 的 /media URL 交给 base，base 自己下载后发送。
     """
     verify_token(request.get("token", ""))
 
@@ -88,11 +89,7 @@ async def action_send_file(request: dict):
     if not path:
         raise ValidationException("path 不能为空")
 
-    ai_host = (Config().AI_SERVICE or {}).get("host", "").rstrip("/")
-    if not ai_host:
-        raise ValidationException("AI_SERVICE.host 未配置")
-
-    url = f"{ai_host}/media/{path}"
+    url = to_url(path, ai_host())
     LOG.info("action/send-file: platform=%s receiver=%s url=%s", platform, receiver, url)
 
     success, error_msg = await base_client.send_file(url, receiver, platform=platform)

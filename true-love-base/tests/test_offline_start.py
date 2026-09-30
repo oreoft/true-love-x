@@ -8,7 +8,7 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 SOURCE = Path(__file__).parents[1] / "src/true_love_base"
@@ -461,7 +461,7 @@ class RoutesTests(unittest.TestCase):
     def test_every_wechat_endpoint_reports_offline_instead_of_trying(self):
         requests = {
             "send_text": {"sendReceiver": "alice", "content": "hi"},
-            "send_file": {"sendReceiver": "alice", "path": "wx_imgs/missing.png"},
+            "send_file": {"sendReceiver": "alice", "url": "http://h-ser:8088/media/gen_img/missing.png"},
             "add_listen": {"nickname": "alice"},
             "execute_wx": {"name": "GetMyInfo"},
             "execute_chat": {"chat_name": "alice", "name": "ChatInfo"},
@@ -511,11 +511,21 @@ class RoutesTests(unittest.TestCase):
     def test_file_for_the_master_goes_to_the_master_of_this_machine(self):
         self.log_in()
 
-        with patch.object(self.routes, "resolve_path", side_effect=lambda path: path):
-            response = asyncio.run(self.routes.send_file({"is_master": True, "path": "wx_imgs/report.png"}))
+        with patch.object(self.routes, "download", AsyncMock(return_value="send-files/report.png")) as download:
+            response = asyncio.run(self.routes.send_file({"is_master": True, "url": "http://h-ser:8088/media/gen_img/report.png"}))
 
         self.assertEqual(response, {"code": 0, "message": "success", "data": None})
-        self.robot.send_file_msg.assert_called_once_with("wx_imgs/report.png", "owner")
+        download.assert_awaited_once_with("http://h-ser:8088/media/gen_img/report.png", self.routes.SEND_FILES_DIR)
+        self.robot.send_file_msg.assert_called_once_with("send-files/report.png", "owner")
+
+    def test_file_that_cannot_be_downloaded_is_reported_as_not_sent(self):
+        self.log_in()
+
+        with patch.object(self.routes, "download", AsyncMock(side_effect=RuntimeError("HTTP 404"))):
+            response = asyncio.run(self.routes.send_file({"sendReceiver": "group", "url": "http://h-ser:8088/media/gen_img/x.png"}))
+
+        self.assertEqual(response, self.routes.ApiErrors.SEND_FAILED.to_dict())
+        self.robot.send_file_msg.assert_not_called()
 
     def test_message_for_the_master_is_refused_on_a_machine_without_one(self):
         self.log_in()

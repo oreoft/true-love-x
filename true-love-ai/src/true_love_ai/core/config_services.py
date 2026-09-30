@@ -10,10 +10,9 @@ class PlatformKeyConfig(BaseSettings):
 
 
 class BaseServerConfig(BaseSettings):
-    """内部 Base / Server 服务配置"""
+    """飞书 base 地址；微信 base、server 的地址登记在 true_love_common.hosts"""
     model_config = SettingsConfigDict(extra="ignore")
 
-    host: str = ""
     lark_host: str = ""
 
 

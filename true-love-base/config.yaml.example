@@ -11,12 +11,10 @@ master_wix:
 # HTTP token for authentication with backend server
 http_token: "your_secret_token"
 
-# Server address (optional). Defaults to the server container on this machine via Docker Desktop.
-server:
-  host: "http://host.docker.internal:8088"
+# Service addresses are not configured here: they live in true_love_common/hosts.py, keyed by machine name.
 
 # Chat listeners are kept in the server's database. When WeChat connects, base fetches
-# them from the server above, retrying for a few minutes; the server restores them after it starts.
+# them from this machine's server, retrying for a few minutes; the server restores them after it starts.
 # Add or remove listeners from the server admin console (POST /admin/listen/add on the server).
 
 # Loki log shipping (optional). Leave enable: false to log to the console only.

@@ -14,10 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from true_love_common.integrations.fastapi import HttpLoggingMiddleware
+from true_love_common.media import media_router
 
 from .routes import router
 from .action_routes import action_router
 from .exception_handlers import setup_exception_handlers
+from ..jobs.job_process import MEDIA_DIRS
 from ..services.listen_manager import get_listen_manager
 
 LOG = logging.getLogger("FastAPIApp")
@@ -76,6 +78,7 @@ def create_app() -> FastAPI:
     # 注册路由
     app.include_router(router)
     app.include_router(action_router)
+    app.include_router(media_router(MEDIA_DIRS))
 
     # /admin 路径返回管理页面
     @app.get("/admin", include_in_schema=False)

@@ -20,14 +20,12 @@ def accepted(url):
 
 class MasterNoticeTests(unittest.TestCase):
     def setUp(self):
-        config = types.SimpleNamespace(
-            base_server=types.SimpleNamespace(host="http://default.test:8088"),
-            http=types.SimpleNamespace(token=["token"]),
-        )
+        config = types.SimpleNamespace(http=types.SimpleNamespace(token=["token"]))
         self.post = Mock(side_effect=lambda url, payload, timeout=None: accepted(url))
         for patcher in (
             patch.object(server_client, "get_config", return_value=config),
             patch.object(server_client, "post_json", self.post),
+            patch.object(server_client, "server_host", lambda bot_id: f"http://{bot_id}-server:8088"),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -36,7 +34,7 @@ class MasterNoticeTests(unittest.TestCase):
         main.notice_master()
 
         url, payload = self.post.call_args.args[:2]
-        self.assertEqual(url, "http://default.test:8088/action/send")
+        self.assertEqual(url, f"http://{server_client.AI_NOTICE_BOT}-server:8088/action/send")
         self.assertEqual(payload, {"is_master": True, "content": "真爱粉 AI 启动成功啦~ ✨", "token": "token"})
 
     def test_ai_still_starts_when_the_notice_cannot_be_sent(self):

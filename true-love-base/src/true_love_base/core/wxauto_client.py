@@ -25,7 +25,7 @@ LOG = logging.getLogger("WxAutoClient")
 WxParam.MESSAGE_HASH = True
 WxParam.FORCE_MESSAGE_XBIAS = True
 WxParam.CHAT_WINDOW_SIZE = (8000, 6000)
-# 下载的文件默认存到 base 工作目录下的 wx_imgs，server 通过 docker 挂载读取
+# 下载的文件默认存到 base 工作目录下的 wx_imgs，通过 /media 开放给别的服务
 _wx_imgs_dir = get_wx_imgs_dir()
 if _wx_imgs_dir:
     WxParam.DEFAULT_SAVE_PATH = _wx_imgs_dir

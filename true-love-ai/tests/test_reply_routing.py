@@ -1,4 +1,4 @@
-"""When several servers share this AI, every reply goes back through the server that delivered the message."""
+"""When several bots share this AI, every reply goes back through the server of the bot that received the message."""
 
 import asyncio
 import types
@@ -36,10 +36,7 @@ def accepted(url):
 
 class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        config = types.SimpleNamespace(
-            base_server=types.SimpleNamespace(host="http://default.test:8088/"),
-            http=types.SimpleNamespace(token=["token"]),
-        )
+        config = types.SimpleNamespace(http=types.SimpleNamespace(token=["token"]))
         self.posted = []
         self.agent = AnsweringAgent()
 
@@ -50,6 +47,7 @@ class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
         for patcher in (
             patch.object(server_client, "get_config", return_value=config),
             patch.object(server_client, "async_post_json", post),
+            patch.object(server_client, "server_host", lambda bot_id: f"http://{bot_id}-server:8088"),
             patch.object(trigger_routes, "verify_token", return_value=True),
             patch("true_love_ai.agent.skills.ensure_skills_loaded"),
             patch("true_love_ai.agent.agent_loop.get_agent_loop", side_effect=lambda: self.agent),
@@ -57,55 +55,39 @@ class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    async def trigger(self, sender, **extra):
+    async def trigger(self, sender, bot_id):
         tasks = BackgroundTasks()
         response = await trigger_routes.trigger(
-            {"token": "token", "msg": ChatMsg(sender_id=sender).to_dict(), **extra}, tasks,
+            {"token": "token", "msg": ChatMsg(sender_id=sender, bot_id=bot_id).to_dict()}, tasks,
         )
         await tasks()
         return response
 
-    async def test_reply_goes_back_through_the_server_named_by_the_trigger(self):
-        await self.trigger("alice", reply_to="http://server-b.test:8088")
+    async def test_reply_goes_back_through_the_server_of_the_bot(self):
+        await self.trigger("alice", "win11-ser")
 
-        self.assertEqual(self.posted, [("http://server-b.test:8088/action/send", "alice")])
-
-    async def test_trigger_without_a_reply_address_is_answered_through_the_default_server(self):
-        await self.trigger("alice")
-
-        self.assertEqual(self.posted, [("http://default.test:8088/action/send", "alice")])
+        self.assertEqual(self.posted, [("http://win11-ser-server:8088/action/send", "alice")])
 
     async def test_triggers_handled_at_the_same_time_keep_their_own_servers(self):
         await asyncio.gather(
-            asyncio.create_task(self.trigger("alice", reply_to="http://server-a.test:8088")),
-            asyncio.create_task(self.trigger("bob", reply_to="http://server-b.test:8088")),
-            asyncio.create_task(self.trigger("carol")),
+            asyncio.create_task(self.trigger("alice", "win10-m8s")),
+            asyncio.create_task(self.trigger("bob", "win11-ser")),
+            asyncio.create_task(self.trigger("carol", "gcp-win")),
         )
 
         self.assertEqual(sorted(self.posted), [
-            ("http://default.test:8088/action/send", "carol"),
-            ("http://server-a.test:8088/action/send", "alice"),
-            ("http://server-b.test:8088/action/send", "bob"),
+            ("http://gcp-win-server:8088/action/send", "carol"),
+            ("http://win10-m8s-server:8088/action/send", "alice"),
+            ("http://win11-ser-server:8088/action/send", "bob"),
         ])
-
-    async def test_reply_address_that_is_not_a_web_address_is_ignored(self):
-        for reply_to in ("server-b.test:8088", "ftp://server-b.test", "", None, 8088):
-            with self.subTest(reply_to=reply_to):
-                self.posted.clear()
-
-                with self.assertNoLogs("ServerClient", level="ERROR"):
-                    await self.trigger("alice", reply_to=reply_to)
-
-                self.assertEqual(self.posted, [("http://default.test:8088/action/send", "alice")])
 
     async def test_failure_notice_also_goes_back_through_the_same_server(self):
         self.agent = CrashingAgent()
 
         with self.assertLogs("TriggerRoutes", level="ERROR"):
-            await self.trigger("alice", reply_to="http://server-b.test:8088")
+            await self.trigger("alice", "win11-ser")
 
-        self.assertEqual(self.posted, [("http://server-b.test:8088/action/send", "alice")])
-
+        self.assertEqual(self.posted, [("http://win11-ser-server:8088/action/send", "alice")])
 
 if __name__ == "__main__":
     unittest.main()

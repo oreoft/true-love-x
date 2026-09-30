@@ -48,6 +48,5 @@ class Config:
             self.HTTP_TOKEN: dict = yconfig.get("http_token")
             self.HTTP = yconfig.get("http")
             self.BASE_SERVER: dict = yconfig.get("base_server")
-            self.AI_SERVICE: dict = yconfig.get("ai_service", {})
             self.ALAPI: dict = yconfig.get("alapi", {})
             self.LOKI: dict = loki_config

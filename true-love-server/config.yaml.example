@@ -4,23 +4,14 @@
 # This file is shared by every machine that runs the server: it holds only the
 # secrets and addresses that are the same everywhere.
 #
-# What differs per bot is NOT here. It lives in the database of each server and
-# is changed in the admin console ("设置" tab), taking effect immediately:
-#   - 本机回调地址        the address AI uses to reach this server
-#   - 每日摸鱼推送的群    groups that get the 09:05 (Asia/Shanghai) push
-#   - 美国摸鱼推送的群    groups that get the 08:00 (America/Chicago) push
-#
+# Service addresses are not configured here: base, server and AI addresses live in
+# true_love_common/hosts.py, keyed by bot (the machine name of its base).
 # Who the master is, is known only to base (see true-love-base/config.yaml.example).
 
-# Base service address (base 服务地址). Base runs on the same machine as the server.
+# Lark base address (飞书 base 服务地址)
 base_server:
   hosts:
-    wechat: "http://host.docker.internal:5000"
     lark: ""
-
-# AI service address (AI 服务地址)
-ai_service:
-  host: "http://localhost:8089"
 
 # Tokens accepted by this server; the first one is also used when calling AI
 http_token: ["your_secret_token"]

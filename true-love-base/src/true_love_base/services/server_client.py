@@ -15,6 +15,7 @@ from typing import Optional
 import httpx
 
 from true_love_common.chat_msg import ChatMsg
+from true_love_common.hosts import bot_hosts
 from true_love_common.http.client import post, post_json
 from true_love_base.configuration import Config
 from true_love_base.models.api import ChatRequest, ChatResponse
@@ -22,8 +23,8 @@ from true_love_base.models.api import ChatRequest, ChatResponse
 config = Config()
 LOG = logging.getLogger("ServerClient")
 
-# 服务端配置（config.yaml 的 server.host）
-SERVER_HOST = config.server_host.rstrip("/")
+# 这台机器的机器人对应的 server，地址登记在 true_love_common.hosts
+SERVER_HOST = bot_hosts(config.machine_name).server
 CHAT_ENDPOINT = f"{SERVER_HOST}/on-message"
 
 # ==================== HTTP Client 连接复用 ====================

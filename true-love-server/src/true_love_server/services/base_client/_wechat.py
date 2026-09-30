@@ -4,9 +4,11 @@
 import json
 import logging
 
+from true_love_common.hosts import machine_bot_id, server_host
 from true_love_common.http.client import HttpResult, async_post, trace_headers
+from true_love_common.media import to_url
 
-from ._interface import BaseClient, api_response_ok, download_to_tmp
+from ._interface import BaseClient, api_response_ok
 
 LOG = logging.getLogger("WeChatBaseClient")
 _TIMEOUT = (2, 10)
@@ -40,11 +42,10 @@ class WeChatBaseClient(BaseClient):
 
     async def send_file(self, ref: str, receiver: str,
                         raise_on_error: bool = False) -> tuple[bool, str]:
-        """发送文件。ref 为 AI 图床 URL 时，先下载到共享目录再传 path 给 wx base。"""
+        """发送文件。ref 是文件的 URL，wx base 自己下载后发送。"""
         try:
             url = f"{self.host}/send/file"
-            path = ref if not ref.startswith(("http://", "https://")) else await download_to_tmp(ref)
-            payload = json.dumps({"path": path, "sendReceiver": receiver}, ensure_ascii=False)
+            payload = json.dumps({"url": ref, "sendReceiver": receiver}, ensure_ascii=False)
             return api_response_ok(await self._post("send_file", url, payload, timeout=_FILE_TIMEOUT))
         except Exception as e:
             LOG.error("WeChat send_file failed: %s", e)
@@ -64,7 +65,9 @@ class WeChatBaseClient(BaseClient):
             return False, str(e)
 
     async def send_img(self, path: str, receiver: str, raise_on_error: bool = False) -> tuple[bool, str]:
-        return await self.send_file(path, receiver, raise_on_error=raise_on_error)
+        """发送这台 server 自己的图片（path 相对工作目录），base 从 server 的 /media 下载"""
+        url = to_url(path, server_host(machine_bot_id()))
+        return await self.send_file(url, receiver, raise_on_error=raise_on_error)
 
     async def add_listen_chat(self, nickname: str) -> dict:
         payload = json.dumps({"nickname": nickname}, ensure_ascii=False)

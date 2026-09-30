@@ -8,18 +8,18 @@ Routes - 路由定义
 import asyncio
 import logging
 import time
-from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Body
-from fastapi.responses import FileResponse
+from true_love_common.hosts import ai_host, bot_hosts, machine_bot_id
 from true_love_common.http.client import post_json
+from true_love_common.media import attach_urls
 
 from .deps import verify_token
 from .exception_handlers import ApiResponse, ValidationException
 from ..core import Config
 from true_love_common.chat_msg import ChatMsg
 from ..services import base_client
-from ..services import listen_store, settings_service
+from ..services import listen_store
 from ..services.listen_manager import get_listen_manager
 from ..services.loki_client import get_loki_client
 from ..services.group_message_repository import GroupMessageRepository
@@ -31,24 +31,10 @@ router = APIRouter()
 # 获取 ListenManager 单例
 listen_manager = get_listen_manager()
 
-_MEDIA_ROOT = Path("wx_imgs")
-
 AI_UNAVAILABLE_REPLY = "啊哦~AI酱 暂时连不上，稍后再试试捏~"
 
 # 外部推送接口里代表管理员的接收者
 MASTER = "master"
-
-
-@router.get("/media/{file_path:path}")
-async def get_media(file_path: str):
-    """提供 wx_imgs 目录下的媒体文件（供 AI 服务跨机读取）"""
-    rel_path = file_path.lstrip("/").removeprefix(f"{_MEDIA_ROOT.name}/")
-    safe = (_MEDIA_ROOT / rel_path).resolve()
-    if not str(safe).startswith(str(_MEDIA_ROOT.resolve())):
-        raise ValidationException("forbidden")
-    if not safe.exists():
-        raise ValidationException("not found")
-    return FileResponse(safe)
 
 
 @router.get("/ping")
@@ -140,22 +126,19 @@ def _save_message(msg: ChatMsg) -> bool:
 
 def _trigger_ai(msg: ChatMsg) -> None:
     """Fire-and-forget POST 到 AI 的 /trigger 接口，AI 没接收时抛异常"""
-    ai_host = (Config().AI_SERVICE or {}).get("host", "").rstrip("/")
-    if not ai_host:
-        LOG.warning("AI_SERVICE.host 未配置，跳过 AI 触发")
-        return
+    # AI 按 bot_id 找回复发到哪个 server；飞书消息不带 bot_id，由这台 server 接
+    msg.bot_id = msg.bot_id or machine_bot_id()
+    # 微信的媒体存在发消息的那台 base 上，换成 base 的 URL 让 AI 直接下载
+    if msg.platform == "wechat":
+        attach_urls(msg, bot_hosts(msg.bot_id).base)
 
     token = (Config().HTTP_TOKEN or [""])[0]
     payload = {
         "token": token,
         "msg": msg.to_dict(),
     }
-    # 多套 server 共用一个 AI 时，告诉 AI 回复发回哪个 server；后台没设置就由 AI 用它的默认地址
-    reply_to = settings_service.get("reply_to")
-    if reply_to:
-        payload["reply_to"] = reply_to
     resp = post_json(
-        f"{ai_host}/trigger",
+        f"{ai_host()}/trigger",
         payload,
         timeout=(5,10),
     )
@@ -445,34 +428,6 @@ async def query_loki_logs(
         "has_more": has_more,
         "count": len(logs)
     })
-
-
-# ==================== Admin 设置接口 ====================
-
-@router.get("/admin/settings")
-async def list_settings():
-    """全部设置项及当前值"""
-    return ApiResponse(data={"settings": settings_service.list_all()})
-
-
-@router.post("/admin/settings/update")
-async def update_setting(request: dict):
-    """
-    修改一项设置，立即生效
-
-    Request Body:
-        - key: 设置项
-        - value: 新的值（文本或列表，取决于设置项）
-    """
-    key = str(request.get("key") or "").strip()
-    if not key:
-        raise ValidationException("key 不能为空")
-    try:
-        value = settings_service.update(key, request.get("value"))
-    except ValueError as e:
-        raise ValidationException(str(e))
-    LOG.info("admin/settings/update: key=%s", key)
-    return ApiResponse(data={"key": key, "value": value})
 
 
 # ==================== Admin 定时提醒管理接口 ====================

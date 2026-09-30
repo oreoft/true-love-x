@@ -20,8 +20,7 @@ async def trigger(request: dict, background_tasks: BackgroundTasks):
 
     Body:
         - token:    鉴权 token
-        - msg:      ChatMsg.to_dict() 格式
-        - reply_to: 回复要发回的 server 地址（可选，多套 server 共用 AI 时由 server 带上）
+        - msg:      ChatMsg.to_dict() 格式，回复发往 msg.bot_id 这个机器人的 server
     """
     if not verify_token(request.get("token", "")):
         return APIResponse.token_error()
@@ -38,13 +37,13 @@ async def trigger(request: dict, background_tasks: BackgroundTasks):
     from true_love_ai.agent.skills import ensure_skills_loaded
     ensure_skills_loaded()
 
-    background_tasks.add_task(_run_agent, msg, request.get("reply_to"))
+    background_tasks.add_task(_run_agent, msg)
     return APIResponse.success(None)
 
 
-async def _run_agent(msg: ChatMsg, reply_to=None) -> None:
-    from true_love_ai.agent.server_client import reply_through
-    with reply_through(reply_to):
+async def _run_agent(msg: ChatMsg) -> None:
+    from true_love_ai.agent.server_client import replying_for
+    with replying_for(msg.bot_id):
         try:
             from true_love_ai.agent.agent_loop import get_agent_loop
             await get_agent_loop().run(msg)

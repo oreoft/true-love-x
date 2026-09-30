@@ -40,7 +40,7 @@ def _detect_mime(file_path: str) -> str:
             "properties": {
                 "file_path": {
                     "type": "string",
-                    "description": "文件路径，如 wx_imgs/document.pdf"
+                    "description": "文件路径，原样从消息中提取，如 http://h-m8s:5000/media/wx_imgs/document.pdf"
                 },
                 "question": {
                     "type": "string",

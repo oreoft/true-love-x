@@ -31,8 +31,7 @@ def base_response(data):
 
 class SendToMasterTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        config = types.SimpleNamespace(
-            BASE_SERVER={"hosts": {"wechat": "http://base.test:5000"}}, HTTP_TOKEN=["token"])
+        config = types.SimpleNamespace(BASE_SERVER={"hosts": {"lark": "http://lark.test"}}, HTTP_TOKEN=["token"])
         dependencies = {
             "true_love_server": module("true_love_server", SOURCE, Config=lambda: config),
             "true_love_server.core": module("true_love_server.core", SOURCE / "core"),
@@ -44,14 +43,19 @@ class SendToMasterTests(unittest.IsolatedAsyncioTestCase):
         self.base_client = importlib.import_module("true_love_server.services.base_client")
         self.post = AsyncMock(return_value=base_response({"code": 0, "message": "success", "data": None}))
         wechat = importlib.import_module("true_love_server.services.base_client._wechat")
-        posting = patch.object(wechat, "async_post", self.post)
-        posting.start()
-        self.addCleanup(posting.stop)
+        for patcher in (
+            patch.object(wechat, "async_post", self.post),
+            patch.object(self.base_client, "machine_bot_id", lambda: "win10-m8s"),
+            patch.object(self.base_client, "bot_hosts",
+                         lambda bot_id: types.SimpleNamespace(base=f"http://{bot_id}-base:5000")),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     async def test_notice_for_the_master_lets_base_choose_the_receiver(self):
         self.assertEqual(await self.base_client.send_to_master("deployed"), (True, ""))
 
-        self.assertEqual(self.post.await_args.args[0], "http://base.test:5000/send/text")
+        self.assertEqual(self.post.await_args.args[0], "http://win10-m8s-base:5000/send/text")
         self.assertEqual(json.loads(self.post.await_args.kwargs["data"]), {"is_master": True, "content": "deployed"})
 
     async def test_base_without_a_master_is_reported_to_the_caller(self):

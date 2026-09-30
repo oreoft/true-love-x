@@ -9,11 +9,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from true_love_common.integrations.fastapi import HttpLoggingMiddleware, setup_exception_handlers
+from true_love_common.media import media_router
 
-from true_love_ai.api.routes import router
 from true_love_ai.api.trigger_routes import trigger_router
 from true_love_ai.api.data_routes import data_router
 from true_love_ai.api.skill_routes import skill_router
+from true_love_ai.services.audio_service import GEN_AUDIO_DIR
+from true_love_ai.services.image_service import GEN_IMG_DIR
+from true_love_ai.services.video_service import GEN_VIDEO_DIR
 
 LOG = logging.getLogger(__name__)
 
@@ -56,7 +59,8 @@ def create_app() -> FastAPI:
     setup_exception_handlers(application, internal_message="发生未知错误, 稍后再试试捏")
 
     # 注册路由
-    application.include_router(router)
+    # AI 生成的图片、视频、音频开放给 base 下载
+    application.include_router(media_router([GEN_IMG_DIR, GEN_VIDEO_DIR, GEN_AUDIO_DIR]))
     application.include_router(trigger_router)
     application.include_router(data_router)
     application.include_router(skill_router)

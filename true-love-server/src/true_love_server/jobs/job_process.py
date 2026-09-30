@@ -16,15 +16,20 @@ from datetime import datetime
 import pytz
 from bs4 import BeautifulSoup
 from PIL import Image
+from pathlib import Path
+
+from true_love_common.hosts import ai_host
 from true_love_common.http.client import get, post
 
 from ..services import base_client
 from ..core import Config
-from ..core.fs import ensure_dir
 
 _config = Config()
 alapi_config = _config.ALAPI
 LOG = logging.getLogger("JobProcess")
+
+# 摸鱼图、早报图的目录，通过 /media 开放给 base 下载后发送
+MEDIA_DIRS = [Path("moyu-jpg"), Path("zaobao-jpg")]
 
 
 def _fetch_ai_data(path: str, params: dict = None) -> str:
@@ -33,12 +38,8 @@ def _fetch_ai_data(path: str, params: dict = None) -> str:
     失败时返回空字符串，不抛异常（Job 不依赖此成功）。
     """
     try:
-        ai_host = (_config.AI_SERVICE or {}).get("host", "").rstrip("/")
-        if not ai_host:
-            LOG.warning("AI_SERVICE.host 未配置，跳过 AI 数据查询: %s", path)
-            return ""
         token = _config.HTTP_TOKEN[0] if _config.HTTP_TOKEN else ""
-        url = f"{ai_host}{path}"
+        url = f"{ai_host()}{path}"
         query_params = {"token": token, **(params or {})}
         resp = get(url, params=query_params, timeout=15)
         resp.raise_for_status()
@@ -126,7 +127,7 @@ def ensure_today_images():
 def download_moyu_file():
     # 使用当前工作目录
     download_directory = 'moyu-jpg/'
-    ensure_dir(download_directory)
+    os.makedirs(download_directory, exist_ok=True)
     local_filename = f'{get_current_date()}.jpg'
     full_file_path = os.path.join(download_directory, local_filename)
     retry_count = 3
@@ -155,7 +156,7 @@ def download_moyu_file():
 def download_zao_bao_file():
     # 使用当前工作目录
     download_directory = 'zaobao-jpg/'
-    ensure_dir(download_directory)
+    os.makedirs(download_directory, exist_ok=True)
     local_filename = f'{get_current_date()}.jpg'
     full_file_path = os.path.join(download_directory, local_filename)
 
