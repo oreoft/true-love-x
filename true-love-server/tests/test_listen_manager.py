@@ -78,6 +78,22 @@ class ListenManagerTests(ServerCase):
         self.assertTrue(result["success"])
         self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat"])
 
+    def test_adding_a_listen_waits_for_base_to_finish_its_retries(self):
+        seen = {}
+        post = self.bases.post
+
+        async def record(url, headers=None, data=None, timeout=None):
+            seen[url.rsplit("/", 2)[-2] + "/" + url.rsplit("/", 1)[-1]] = timeout
+            return await post(url, headers=headers, data=data, timeout=timeout)
+
+        from unittest.mock import patch
+        from server_env import base_http
+        with patch.object(base_http, "async_post", record):
+            self.run_async(self.manager.add_listen("new chat"))
+
+        self.assertEqual(seen["listen/add"][1], 30)
+        self.assertEqual(seen["execute/wx"][1], 10)
+
     @staticmethod
     def run_async(coro):
         import asyncio

@@ -16,6 +16,9 @@ from ._client import BaseClient
 
 LOG = logging.getLogger("WeChatClient")
 
+# base 加监听失败时会重试 3 次（实测 11 秒多），要等它返回真实结果
+_LISTEN_ADD_TIMEOUT = (2, 30)
+
 
 class WeChatClient(BaseClient):
 
@@ -23,10 +26,10 @@ class WeChatClient(BaseClient):
         super().__init__(bot)
         self.log = LOG
 
-    async def _call(self, label: str, path: str, payload: dict) -> dict:
+    async def _call(self, label: str, path: str, payload: dict, timeout=None) -> dict:
         """调微信专属接口，返回 {"success", "data", "message"}，不抛异常"""
         try:
-            res = await self._post(path, payload)
+            res = await self._post(path, payload, **({"timeout": timeout} if timeout else {}))
             res.raise_for_status()
             result = res.data or {}
             return {"success": result.get("code") == 0, "data": result.get("data"),
@@ -36,7 +39,7 @@ class WeChatClient(BaseClient):
             return {"success": False, "data": None, "message": str(e)}
 
     async def add_listen_chat(self, nickname: str) -> dict:
-        return await self._call("add_listen_chat", "/listen/add", {"nickname": nickname})
+        return await self._call("add_listen_chat", "/listen/add", {"nickname": nickname}, timeout=_LISTEN_ADD_TIMEOUT)
 
     async def execute_wx(self, method_name: str, params: dict = None) -> dict:
         return await self._call("execute_wx", "/execute/wx", {"name": method_name, "params": params or {}})
