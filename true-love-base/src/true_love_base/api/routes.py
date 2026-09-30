@@ -12,7 +12,9 @@ from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
 from true_love_base.models.api import ApiErrors, ApiResponse
-from true_love_base.utils.path_resolver import resolve_path
+from true_love_common.media import download
+
+from true_love_base.utils.path_resolver import SEND_FILES_DIR
 
 if TYPE_CHECKING:
     from true_love_base.services.robot import Robot
@@ -53,7 +55,7 @@ async def status() -> dict[str, Any]:
 
     Response:
         - data: {"wx_online": 微信是否在线, "self_name": 当前登录的昵称, "since": 进入当前状态的时间,
-                  "bot_id": 这个机器人的标识（机器名）}
+                  "bot_id": 这个机器人的标识（wxid）}
     """
     robot = _get_robot()
     if robot is None:
@@ -68,7 +70,7 @@ async def send_text(request: dict[str, Any] | None = Body(default=None)) -> dict
 
     Request Body:
         - sendReceiver: 接收者
-        - is_master: 为 true 时发给这台机器的管理员，忽略 sendReceiver（可选）
+        - is_master: 为 true 时发给这个号的管理员，忽略 sendReceiver（可选）
         - content: 消息内容
         - atReceiver: 要@的人（可选）
 
@@ -103,8 +105,8 @@ async def send_file(request: dict[str, Any] | None = Body(default=None)) -> dict
 
     Request Body:
         - sendReceiver: 接收者
-        - is_master: 为 true 时发给这台机器的管理员，忽略 sendReceiver（可选）
-        - path: 文件路径，相对 base 工作目录（如 wx_imgs/xxx.jpg、moyu-jpg/xxx.jpg），文件必须存在
+        - is_master: 为 true 时发给这个号的管理员，忽略 sendReceiver（可选）
+        - url: 文件的下载地址，base 先下载到 send-files/ 再发送
     """
     robot = _get_robot()
     unavailable = _unavailable(robot)
@@ -114,19 +116,19 @@ async def send_file(request: dict[str, Any] | None = Body(default=None)) -> dict
     data = _payload(request)
     if data.get("is_master") and not robot.master:
         return ApiErrors.NO_MASTER.to_dict()
-    path = data.get("path", "")
+    url = data.get("url", "")
     receiver = _receiver(robot, data)
 
-    if not receiver or not path:
+    if not receiver or not url:
         return ApiErrors.INVALID_PARAMS.to_dict()
 
     try:
-        resolved_path = resolve_path(path)
-    except FileNotFoundError as e:
-        LOG.error("Failed to send file to [%s]: %s", receiver, e)
+        path = await download(url, SEND_FILES_DIR)
+    except Exception as e:
+        LOG.error("Failed to download file for [%s]: %s", receiver, e)
         return ApiErrors.SEND_FAILED.to_dict()
 
-    success = await _run_wx_operation(robot.send_file_msg, resolved_path, receiver)
+    success = await _run_wx_operation(robot.send_file_msg, path, receiver)
     if success:
         return ApiResponse.success().to_dict()
     return ApiErrors.SEND_FAILED.to_dict()
@@ -290,7 +292,7 @@ def _unavailable(robot: Optional["Robot"]) -> Optional[dict[str, Any]]:
 
 
 def _receiver(robot: "Robot", data: dict[str, Any]) -> str:
-    """消息发给谁：指明发给管理员时用这台机器的管理员，否则用请求里的接收者"""
+    """消息发给谁：指明发给管理员时用这个号的管理员，否则用请求里的接收者"""
     return robot.master if data.get("is_master") else data.get("sendReceiver", "")
 
 

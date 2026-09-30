@@ -35,7 +35,6 @@ LOG = logging.getLogger("AudioSkill")
 async def generate_audio(params: dict, ctx: dict) -> str:
     text = params.get("text", "")
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
 
     if not text:
         return "诶嘿~请告诉我你想让我说什么哦~"
@@ -46,7 +45,7 @@ async def generate_audio(params: dict, ctx: dict) -> str:
 
         if result and result.audio_id:
             from true_love_ai.agent.server_client import send_file
-            ok = await send_file(receiver, f"{GEN_AUDIO_DIR.name}/{result.audio_id}.wav", platform=platform)
+            ok = await send_file(receiver, f"{GEN_AUDIO_DIR.name}/{result.audio_id}.wav")
             if ok:
                 return "好耶~语音已生成并发送！"
             LOG.error("generate_audio: send_file 返回失败 audio_id=%s", result.audio_id)

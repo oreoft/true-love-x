@@ -9,14 +9,12 @@ Configuration - 配置管理模块
 """
 
 import logging
-import socket
+import os
 from typing import Optional
 
 import yaml
 
 from true_love_common.observability.logging import LoggingConfig
-
-DEFAULT_SERVER_HOST = "http://host.docker.internal:8088"
 
 
 class Config:
@@ -39,29 +37,30 @@ class Config:
             return
         
         self.config = self._load_config()
-        
-        # 先初始化日志系统（使用配置文件中的 loki 配置）
-        self._setup_logging()
-        
-        # 这台机器的名字：所有机器共用一份配置，按机器名区分各自的条目；也是消息里的 bot_id
-        self.machine_name = socket.gethostname().lower()
-        self.master_wix = self._find_master(self.config.get("master_wix"), self.machine_name)
-        self.http_token = self.config["http_token"]
 
-        # Server 服务地址（默认与 base 同机，server 跑在 Docker Desktop 里）
-        self.server_host = (self.config.get("server") or {}).get("host") or DEFAULT_SERVER_HOST
-        
+        # 这个 base 跑的是哪个号：部署时注入 BOT_ID（微信是 wxid），所有 base 共用一份配置，按它取自己那一段
+        self.bot_id = os.environ.get("BOT_ID", "").strip()
+
+        # 先初始化日志系统（使用配置文件中的 loki 配置），日志带上 bot_id 方便按号筛选
+        self._setup_logging()
+
+        bot = self._find_bot(self.config.get("bots"), self.bot_id)
+        self.master_wix = str(bot.get("master") or "").strip()
+        self.http_token = self.config["http_token"]
+        # server 回调这个 base 的地址，启动时由 main 用 tailnet 地址填上
+        self.callback = ""
+
         Config._initialized = True
-        
-        # 日志确认配置加载
+
         LOG = logging.getLogger("Config")
-        LOG.info(f"Config loaded: machine_name={self.machine_name}, master_wix={self.master_wix}")
-        LOG.info(f"Config loaded: server_host={self.server_host}")
-    
+        if not self.master_wix:
+            LOG.warning(f"No master configured for bot [{self.bot_id}], notifications to the master are off")
+        LOG.info(f"Config loaded: bot_id={self.bot_id}, master_wix={self.master_wix}")
+
     def _setup_logging(self) -> None:
         """设置日志系统（从配置文件读取 Loki 配置）"""
         loki_config = self.config.get("loki", {}) or {}
-        
+
         LoggingConfig.setup(
             service_name="tl-base",
             log_level=logging.INFO,
@@ -70,25 +69,24 @@ class Config:
             loki_url=loki_config.get("loki_url", ""),
             loki_user_id=loki_config.get("user_id", ""),
             loki_api_key=loki_config.get("api_key", ""),
+            loki_tags={"bot_id": self.bot_id} if self.bot_id else None,
         )
 
     @staticmethod
-    def _find_master(value, machine_name: str) -> str:
+    def _find_bot(bots, bot_id: str) -> dict:
         """
-        这台机器的管理员昵称，没配置时为空串
+        配置里这个号的那一段；没注入 BOT_ID 或者表里没有这个号时抛 SystemExit，base 不启动
 
         Args:
-            value: 配置里的 master_wix，{机器名: 昵称}
-            machine_name: 这台机器的名字
+            bots: 配置里的 bots，{bot_id: {master: 管理员昵称}}
+            bot_id: 部署时注入的 BOT_ID
         """
-        master = ""
-        if isinstance(value, dict):
-            masters = {str(name).lower(): nickname for name, nickname in value.items()}
-            master = str(masters.get(machine_name) or "").strip()
-        if not master:
-            logging.getLogger("Config").warning(
-                f"No master configured for machine [{machine_name}], notifications to the master are off")
-        return master
+        if not bot_id:
+            raise SystemExit("BOT_ID is not set: deploy base with the wxid of the account it runs")
+        bot = bots.get(bot_id) if isinstance(bots, dict) else None
+        if not isinstance(bot, dict):
+            raise SystemExit(f"Bot [{bot_id}] is not in the bots map of config.yaml, add it before starting base")
+        return bot
 
     @staticmethod
     def _load_config() -> dict:

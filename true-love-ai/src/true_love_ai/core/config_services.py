@@ -9,14 +9,6 @@ class PlatformKeyConfig(BaseSettings):
     litellm_base_url: str = ""
 
 
-class BaseServerConfig(BaseSettings):
-    """内部 Base / Server 服务配置"""
-    model_config = SettingsConfigDict(extra="ignore")
-
-    host: str = ""
-    lark_host: str = ""
-
-
 class NexuConfig(BaseSettings):
     """Nexu 服务配置"""
     model_config = SettingsConfigDict(extra="ignore")

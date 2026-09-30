@@ -89,6 +89,7 @@ class LoggingConfig:
         loki_url: str = "",
         loki_user_id: str = "",
         loki_api_key: str = "",
+        loki_tags: dict[str, str] | None = None,
     ) -> None:
         if cls._initialized:
             return
@@ -115,7 +116,7 @@ class LoggingConfig:
                 loki_handler = LokiQueueHandler(
                     Queue(queue_size),
                     url=f"{loki_url.rstrip('/')}/loki/api/v1/push",
-                    tags={"service_name": service_name},
+                    tags={"service_name": service_name, **(loki_tags or {})},
                     auth=(loki_user_id, loki_api_key),
                     version="1",
                 )

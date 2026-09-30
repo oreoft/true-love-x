@@ -36,14 +36,16 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.sdk.SendMsg.return_value = True
         self.sdk.IsOnline.return_value = True
         self.wechat_running = True
-        self.server = types.SimpleNamespace(get_chat=Mock(), fetch_listen_chats=Mock(return_value=[]))
+        self.server = types.SimpleNamespace(
+            get_chat=Mock(), fetch_listen_chats=Mock(return_value=[]), use_self_name=Mock())
 
         def open_wechat(**kwargs):
             if not self.wechat_running:
                 raise RuntimeError("no logged-in WeChat main window")
             return self.sdk
 
-        http = module("true_love_base.api.server", enable_http=lambda robot: self.events.append("http"))
+        http = module(
+            "true_love_base.api.server", HTTP_PORT=5000, enable_http=lambda robot: self.events.append("http"))
         dependencies = {
             "true_love_base": module("true_love_base", __path__=[]),
             "true_love_base.api": module("true_love_base.api", server=http),
@@ -61,13 +63,14 @@ class ListenerLifecycleTests(unittest.TestCase):
             "true_love_base.utils.path_resolver": module(
                 "true_love_base.utils.path_resolver", get_wx_imgs_dir=lambda: None
             ),
+            "true_love_base.utils.tailnet": module("true_love_base.utils.tailnet", tailnet_ip=Mock()),
             "true_love_base.utils.win_env": module(
-                "true_love_base.utils.win_env", keep_awake=lambda: None, display_scale_percent=lambda: 100
+                "true_love_base.utils.win_env", keep_awake=lambda: None
             ),
             "true_love_base.configuration": module(
                 "true_love_base.configuration",
                 Config=lambda: types.SimpleNamespace(
-                    master_wix="owner", machine_name="win10-m8s",
+                    master_wix="owner", bot_id="wxid_m8s", callback="",
                 ),
             ),
             "true_love_base.services": module(
@@ -87,6 +90,10 @@ class ListenerLifecycleTests(unittest.TestCase):
             "lifecycle_supervisor", "services/wx_supervisor.py"
         )
         self.main_module = load_source("lifecycle_main", "main.py")
+        for name, value in (("current_wxid", lambda: "wxid_m8s"), ("tailnet_ip", lambda: "100.64.0.8")):
+            patcher = patch.object(self.main_module, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.client = self.client_module.WxAutoClient()
         self.assertTrue(self.client.connect())
 
@@ -350,34 +357,13 @@ class ListenerLifecycleTests(unittest.TestCase):
         started = robot.send_text_msg.call_args_list[0].args[0]
         self.assertIn("没从 server 取到监听列表", started)
 
-    def test_startup_notice_warns_when_display_scaling_is_not_standard(self):
-        with (
-            patch.object(self.main_module, "display_scale_percent", return_value=225),
-            self.assertLogs("Main", level="WARNING"),
-        ):
-            robot = self.run_main()
-
-        started = robot.send_text_msg.call_args_list[0].args[0]
-        self.assertIn("started successfully", started)
-        self.assertIn("225%", started)
-
-    def test_startup_notice_is_silent_about_standard_or_unknown_scaling(self):
-        for scale in (100, None):
-            with self.subTest(scale=scale):
-                self.events.clear()
-                with patch.object(self.main_module, "display_scale_percent", return_value=scale):
-                    robot = self.run_main()
-
-                started = robot.send_text_msg.call_args_list[0].args[0]
-                self.assertNotIn("%", started)
-
     def test_base_keeps_the_machine_awake_while_it_runs(self):
         with patch.object(self.main_module, "keep_awake") as keep_awake:
             self.run_main()
 
         keep_awake.assert_called_once_with()
 
-    def test_messages_are_stamped_with_the_name_of_this_machine(self):
+    def test_messages_are_stamped_with_the_bot_this_base_runs(self):
         client, robot = self.main_module.init_wx()
         self.addCleanup(robot.cleanup)
         client.connect()
@@ -386,9 +372,9 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         deliver(types.SimpleNamespace(attr="friend"), object())
 
-        self.assertEqual(self.client_module.convert_message.call_args.kwargs["bot_id"], "win10-m8s")
+        self.assertEqual(self.client_module.convert_message.call_args.kwargs["bot_id"], "wxid_m8s")
 
-    def test_robot_knows_the_master_of_this_machine(self):
+    def test_robot_knows_the_master_of_this_bot(self):
         client, robot = self.main_module.init_wx()
         self.addCleanup(robot.cleanup)
 

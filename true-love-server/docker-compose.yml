@@ -30,14 +30,8 @@ services:
     ports:
       - "8088:8088"
 
-    # 添加 host.docker.internal 解析（用于容器内访问 Windows 服务）
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-
     # 卷挂载
     volumes:
-      # 仓库根目录 - 监听列表和与 base 共享的媒体目录
-      - ..:/mnt/true-love-n
       # 配置目录（CI 写入的、与 true-love-n 同级的 config-center），只读；不存在时直接报错，不自动建空目录
       - type: bind
         source: ../../config-center/true-love-n
@@ -45,18 +39,14 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # 本地卷 - SQLite 数据库（不放在 Windows 挂载目录上）
+      # 本地卷 - SQLite 数据库（不放在 Windows 挂载目录上）：platform.db 加每个机器人一个 <bot_id>.db
       - tl-server-dbs:/app/dbs
 
-    # 启动前把挂载目录里的文件软链到 /app（服务按工作目录的相对路径读写）
-    # 共享目录不存在就先建出来；ln -n 保证容器原地重启时替换旧链接，而不是钻进目录里再建一层
+    # 启动前把配置文件软链到 /app（服务按工作目录的相对路径读取）
+    # 和 base、AI 之间的媒体文件都走 /media URL，不再挂共享目录
     command: >
       /bin/sh -c "
-      R=/mnt/true-love-n &&
       ln -sfn /mnt/config-center/true-love-server/config.yaml /app/config.yaml &&
-      for d in wx_imgs moyu-jpg zaobao-jpg gen-img gen-video gen-audio files-save; do
-      mkdir -p $$R/true-love-base/$$d && ln -sfn $$R/true-love-base/$$d /app/$$d || exit 1;
-      done &&
       exec python -m true_love_server
       "
 

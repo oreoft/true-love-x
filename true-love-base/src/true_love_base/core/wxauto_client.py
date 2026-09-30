@@ -7,6 +7,8 @@ WxAuto WxAutoClient - wxautox4 SDK 封装客户端
 
 import json
 import logging
+import os
+import time
 from datetime import datetime
 from threading import Lock
 from typing import Callable, Optional
@@ -25,7 +27,7 @@ LOG = logging.getLogger("WxAutoClient")
 WxParam.MESSAGE_HASH = True
 WxParam.FORCE_MESSAGE_XBIAS = True
 WxParam.CHAT_WINDOW_SIZE = (8000, 6000)
-# 下载的文件默认存到 base 工作目录下的 wx_imgs，server 通过 docker 挂载读取
+# 下载的文件默认存到 base 工作目录下的 wx_imgs，通过 /media 开放给别的服务
 _wx_imgs_dir = get_wx_imgs_dir()
 if _wx_imgs_dir:
     WxParam.DEFAULT_SAVE_PATH = _wx_imgs_dir
@@ -33,22 +35,30 @@ if _wx_imgs_dir:
 
 MessageCallback = Callable[[ChatMsg, str], None]
 
+# SendFiles / SendAudio 偶尔报失败但文件其实已经发出去了（m8s 上约一成）。
+# 报失败后最多等这么久，看监听有没有收到自己刚发出的这条消息，收到就按成功算
+SEND_CONFIRM_SECONDS = 10
+# 自己发出的文件在监听里的消息类型
+_SELF_MEDIA_TYPES = {"image", "file", "video", "voice"}
+
 
 class WxAutoClient():
     """
     wxautox4 客户端适配器 封装 wxautox4 的所有操作。
     """
 
-    def __init__(self, bot_id: str = ""):
+    def __init__(self, bot_id: str = "", account_of: Optional[Callable[[], str]] = None):
         """
         创建客户端；不连接微信，微信可用时由 connect() 建立连接
 
         Args:
-            bot_id: 这个机器人的标识（机器名），随每条消息带给下游
+            bot_id: 这个机器人的标识（微信是 wxid），随每条消息带给下游
+            account_of: 读出当前登录的微信号；给了就在连接时核对，登录的不是 bot_id 这个号就不接管
         """
         self._wx = None
         self._running = True
         self._bot_id = bot_id
+        self._account_of = account_of
         # 当前登录账号的昵称，每次连接时从微信读取
         self._self_name: str = ""
         # 当前状态（在线或离线）开始的时间
@@ -57,6 +67,9 @@ class WxAutoClient():
         self._connect_error: Optional[str] = None
         # Coordinate listener registration with shutdown, independently of SDK UI locks.
         self._lifecycle_lock = Lock()
+        # 监听里看到的自己发出的文件：{聊天对象: [(时间, 类型, 内容)]}，只保留最近几条
+        self._self_media: dict[str, list[tuple[float, str, str]]] = {}
+        self._self_media_lock = Lock()
 
     def connect(self) -> bool:
         """连接已登录的微信主窗口；微信没开或没登录时返回 False，由调用方稍后重试"""
@@ -65,6 +78,7 @@ class WxAutoClient():
             # 主窗口还在但已经掉线（比如断网）时先不接管，等它恢复在线
             if not wx.IsOnline():
                 raise RuntimeError("WeChat main window is open but not online")
+            self._check_account()
         except Exception as e:
             # 离线期间每隔几秒就会重试一次
             level = logging.DEBUG if str(e) == self._connect_error else logging.WARNING
@@ -77,6 +91,14 @@ class WxAutoClient():
         self._state_since = datetime.now()
         LOG.info("WxAutoClient connected, self: %s", self.get_self_name())
         return True
+
+    def _check_account(self) -> None:
+        """登录的号和部署时指定的不一致时抛异常，避免用别人的身份收发消息"""
+        if self._account_of is None:
+            return
+        account = self._account_of()
+        if account != self._bot_id:
+            raise RuntimeError(f"WeChat is logged in as {account}, but this base runs bot {self._bot_id}")
 
     def disconnect(self) -> None:
         """微信掉线后丢弃当前实例；监听在下一次 connect() 之后重新注册"""
@@ -216,18 +238,54 @@ class WxAutoClient():
         """[Beta] 发送语音条消息，需要 4.1.9+ 客户端"""
         LOG.debug(f"SendAudio path: {file_path}")
         sub_window = self.wx.GetSubWindow(receiver)
+        started = time.monotonic()
         result = sub_window.SendAudio(file_path) if sub_window else self.wx.SendAudio(file_path, who=receiver)
+        if not result and sub_window and self._confirm_sent(receiver, file_path, started):
+            return True
         return self._check_response(result, "SendAudio", receiver)
 
     def _send_file_generic(self, receiver: str, file_path: str) -> bool:
         try:
             LOG.debug(f"SendFiles path: {file_path}")
             sub_window = self.wx.GetSubWindow(receiver)
+            started = time.monotonic()
             result = sub_window.SendFiles(file_path) if sub_window else self.wx.SendFiles(file_path, receiver)
+            if not result and sub_window and self._confirm_sent(receiver, file_path, started):
+                return True
             return self._check_response(result, "SendFiles", receiver)
         except Exception as e:
             LOG.error(f"Failed to send file to [{receiver}]: {e}")
             return False
+
+    def _confirm_sent(self, receiver: str, file_path: str, started: float) -> bool:
+        """
+        SDK 报发送失败后，等监听里出现自己刚发出的这条消息；只有监听中的聊天能这样确认
+
+        文件消息的内容里带文件名，要求文件名对得上；图片、视频、语音的内容里没有文件名，出现就算
+        """
+        filename = os.path.basename(file_path)
+        deadline = started + SEND_CONFIRM_SECONDS
+        while True:
+            with self._self_media_lock:
+                seen = list(self._self_media.get(receiver, []))
+            for at, kind, content in seen:
+                if at >= started and (kind != "file" or filename in content):
+                    LOG.warning(f"[SendFiles] [{receiver}] reported failure, but [{filename}] showed up "
+                                f"in the chat {at - started:.1f}s later; treating it as sent")
+                    return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.5)
+
+    def _remember_self_media(self, chat_name: str, raw_msg) -> None:
+        kind = str(getattr(raw_msg, 'type', '') or '')
+        if kind not in _SELF_MEDIA_TYPES:
+            return
+        content = str(getattr(raw_msg, 'content', '') or '')
+        with self._self_media_lock:
+            recent = self._self_media.setdefault(chat_name, [])
+            recent.append((time.monotonic(), kind, content))
+            del recent[:-20]
 
     # ==================== 消息监听 ====================
 
@@ -294,6 +352,8 @@ class WxAutoClient():
                 attr = getattr(raw_msg, 'attr', '')
                 # 快速过滤：在消息转换之前过滤，减少不必要的处理
                 if attr.lower() in ['weixin', 'system', 'self']:
+                    if attr.lower() == 'self':
+                        self._remember_self_media(chat_name, raw_msg)
                     LOG.info(f"ignored system message attr is [{attr}]")
                     return
                 LOG.info('------------ Raw message info ------------\n%s', self._dump_obj_attrs(raw_msg))

@@ -1,4 +1,4 @@
-name: true-love-base Deploy to m8s-win
+name: true-love-base Deploy to m8s-win and ser-win
 
 on:
   workflow_dispatch:
@@ -10,10 +10,7 @@ on:
       - ".github/workflows/true-love-base.yml"
 
 env:
-  SERVER_IP: ${{ secrets.M8S_GW_HOST }}
   SERVER_PORT: 2233
-  SERVER_USER: admin
-  SERVER_SSH_KEY: ${{ secrets.M8S_SSH_DOOR_KEY }}
 
 permissions:
   contents: read
@@ -21,9 +18,31 @@ permissions:
 
 jobs:
   deploy:
-    name: Deploy Base
+    name: Deploy Base (${{ matrix.machine }})
     runs-on: ubuntu-latest
     environment: production
+    # Each machine runs one bot: the WeChat account logged in there. One failing machine does not stop the other.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - machine: m8s
+            host_secret: M8S_GW_HOST
+            key_secret: M8S_SSH_DOOR_KEY
+            user: admin
+            bot_id: wxid_ii1pon2s4t4h22  # 真爱粉
+            bot_name: 真爱粉
+          - machine: ser
+            host_secret: SER_GW_HOST
+            key_secret: SER_SSH_DOOR_KEY
+            user: server
+            bot_id: wxid_oc36wts1bhxr19  # kun jr
+            bot_name: kun jr
+    env:
+      SERVER_IP: ${{ secrets[matrix.host_secret] }}
+      SERVER_USER: ${{ matrix.user }}
+      SERVER_SSH_KEY: ${{ secrets[matrix.key_secret] }}
+      BOT_ID: ${{ matrix.bot_id }}
 
     steps:
       - name: Checkout
@@ -74,6 +93,8 @@ jobs:
             $configDir = Join-Path ([Environment]::GetFolderPath('Desktop')) 'config-center\true-love-n\true-love-base'
             New-Item -ItemType Directory -Force -Path $configDir | Out-Null
             Move-Item -Force -Path (Join-Path $HOME '.tl-config-true-love-base.yaml') -Destination (Join-Path $configDir 'config.yaml')
+            # The runner reads the bot id from this file into BOT_ID
+            Set-Content -NoNewline -Encoding ascii -Path (Join-Path $configDir 'bot_id') -Value '${{ env.BOT_ID }}'
 
             # Pull before stopping anything: if it fails, base keeps running; the task is also (re)registered from these scripts
             git -C $repoRoot pull --ff-only
@@ -113,7 +134,7 @@ jobs:
             "token": "${{ secrets.TL_NOTIFY_TOKEN }}",
             "sendReceiver": "master",
             "atReceiver": "",
-            "content": "真爱粉 base 模块已经成功启动"
+            "content": "${{ matrix.bot_name }} base 模块已经成功部署（${{ matrix.machine }}）"
           }' || echo "通知发送失败，但部署成功"
 
 

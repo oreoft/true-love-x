@@ -2,92 +2,50 @@
 """
 PathResolver - 路径解析工具
 
-Base 端文件路径处理工具。
+Base 端的媒体目录都在工作目录下（uv 执行时工作目录就是 true-love-base）：
+- wx_imgs/：收到的微信图片、视频、文件，通过 /media 开放给别的服务
+- send-files/：要发出去的文件，从别的服务给的 URL 下载到这里
 
-设计原则：
-- 共享文件统一存储在 Base 工作目录下（wx_imgs/、moyu-jpg/、zaobao-jpg/ 等）
-- Server 通过 Docker 挂载映射来读取 Base 目录的文件
-- 传输给 Server 时：使用相对路径（如 wx_imgs/filename.jpg）
-- uv 执行时工作目录就是 true-love-base，直接使用相对路径即可
-
-核心函数：
-- get_wx_imgs_dir(): 获取 wx_imgs 路径，用于 Base 下载文件
-- to_server_path(): 将完整路径转为相对路径，用于传输给 Server
-- resolve_path(): 解析相对路径，用于 Base 读取文件
+传给 Server 的是相对路径（如 wx_imgs/filename.jpg），Server 再拼成 base 的 /media URL。
 """
 
 import logging
 import os
+from pathlib import Path
 
 LOG = logging.getLogger("PathResolver")
 
 # 微信图片下载目录名
 WX_IMGS_DIR = "wx_imgs"
+# 要发出去的文件的下载目录
+SEND_FILES_DIR = Path("send-files")
 
 
 def get_wx_imgs_dir() -> str:
     """
-    获取 wx_imgs 文件夹路径
-    
-    如果文件夹不存在则创建。
-    用于 Base 下载微信图片，Server 通过 Docker 挂载读取。
-    
+    获取 wx_imgs 文件夹路径，不存在则创建
+
     Returns:
         wx_imgs 文件夹路径
     """
     if not os.path.exists(WX_IMGS_DIR):
         os.makedirs(WX_IMGS_DIR)
         LOG.info(f"Created wx_imgs directory: {WX_IMGS_DIR}")
-    
+
     return WX_IMGS_DIR
 
 
 def to_server_path(full_path: str) -> str:
     """
-    将完整路径转换为 Server 可用的相对路径
-    
-    用于 Base 下载文件后，将路径转换为传输给 Server 的格式。
-    
+    将完整路径转换为传给 Server 的相对路径
+
     Args:
         full_path: 完整文件路径，如 "wx_imgs/xxx.jpg"
-    
+
     Returns:
         相对路径，如 "wx_imgs/xxx.jpg"
-    
-    Example:
-        >>> to_server_path("wx_imgs/image.jpg")
-        "wx_imgs/image.jpg"
     """
-    # 提取文件名
     filename = os.path.basename(str(full_path))
-    # 返回相对路径
     relative_path = f"{WX_IMGS_DIR}/{filename}"
     LOG.debug(f"Converted to server path: {full_path} -> {relative_path}")
     return relative_path
-
-
-def resolve_path(path: str) -> str:
-    """
-    解析文件路径，确保文件存在
-    
-    用于 Base 读取 Server 发送的文件路径。
-    
-    Args:
-        path: 相对路径，如 "wx_imgs/xxx.png" 或 "moyu-jpg/xxx.jpg"
-    
-    Returns:
-        文件路径（验证存在后返回）
-    
-    Raises:
-        FileNotFoundError: 文件不存在
-    
-    Example:
-        >>> resolve_path("moyu-jpg/12-28.jpg")
-        "moyu-jpg/12-28.jpg"
-    """
-    # 检查文件是否存在
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"文件路径不存在: {path}")
-
-    LOG.debug(f"Resolved path: {path}")
-    return path

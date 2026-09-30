@@ -41,10 +41,9 @@ LOG = logging.getLogger("AnalyzeGroupSkill")
 async def analyze_group(params: dict, ctx: dict) -> str:
     question = params.get("question", "").strip()
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
 
     from true_love_ai.agent.skills._group_message import fetch_group_messages
-    history = await fetch_group_messages(receiver, limit=500, platform=platform)
+    history = await fetch_group_messages(receiver, limit=500)
 
     if not history:
         return "我没能获取到群里最近的聊天记录，没有足够的信息来分析捏~"

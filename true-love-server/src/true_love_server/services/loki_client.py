@@ -74,16 +74,20 @@ class LokiClient:
         """获取 Basic Auth 认证"""
         return HTTPBasicAuth(self.user_id, self.api_key)
 
-    def _build_query(self, services: Optional[List[str]] = None, keyword: str = '') -> str:
+    def _build_query(self, services: Optional[List[str]] = None, keyword: str = '', bot_id: str = '') -> str:
         """
         构建 LogQL 查询语句
 
         services 只接受配置里的服务名，不认识的忽略；为空时查全部。
         keyword 按不区分大小写的子串匹配整行日志。
+        bot_id 只筛带 bot_id 标签的日志：每个 base 只跑一个机器人，上报时带这个标签；
+        server 和 AI 同时服务所有机器人，日志没有这个标签。
         """
         selected = [s for s in (services or []) if s in self.services] or self.services
         services_regex = '|'.join(selected)
-        query = f'{{service_name=~`{services_regex}`}}'
+        bot_id = re.sub(r'[^A-Za-z0-9_-]', '', bot_id or '')
+        bot_selector = f', bot_id=`{bot_id}`' if bot_id else ''
+        query = f'{{service_name=~`{services_regex}`{bot_selector}}}'
         keyword = keyword.replace('`', '').strip()
         if keyword:
             # 反引号字符串里不需要再转义，关键词本身按字面匹配
@@ -145,7 +149,8 @@ class LokiClient:
             end_ns: int,
             limit: int = 50,
             services: Optional[List[str]] = None,
-            keyword: str = ''
+            keyword: str = '',
+            bot_id: str = ''
     ) -> dict:
         """
         查询时间范围内的日志
@@ -156,6 +161,7 @@ class LokiClient:
             limit: 最大返回条数
             services: 只查这些服务，为空查全部
             keyword: 关键词，不区分大小写
+            bot_id: 只查这个机器人的 base 日志，为空不筛
         
         Returns:
             {
@@ -171,7 +177,7 @@ class LokiClient:
                 "message": "Loki 配置不完整，请检查 config.yaml 中的 loki 配置"
             }
 
-        query = self._build_query(services, keyword)
+        query = self._build_query(services, keyword, bot_id)
 
         # 直接访问 Loki API
         url = f"{self.loki_url}/loki/api/v1/query_range"

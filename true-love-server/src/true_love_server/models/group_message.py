@@ -2,13 +2,13 @@
 """
 群消息记录模型
 
-用于存储群聊消息，支持多平台（wechat / lark / ...）。
+每个机器人一个库，库里只有这个机器人收到的消息，所以不再按平台区分。
 """
 
 from datetime import datetime
 
 from sqlalchemy import Column, Integer, String, Boolean, DateTime, Text, Index
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
 
@@ -19,9 +19,6 @@ class GroupMessage(Base):
     __tablename__ = 'group_messages'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-
-    # 平台标识
-    platform = Column(String(32), nullable=False, default="wechat", comment="来源平台: wechat/lark")
 
     # 消息基础信息
     msg_id = Column(String(64), nullable=False, index=True, comment="消息ID")
@@ -56,7 +53,6 @@ class GroupMessage(Base):
 
     __table_args__ = (
         Index('idx_chat_time', 'chat_id', 'created_at'),
-        Index('idx_platform_chat', 'platform', 'chat_id'),
     )
 
     def __repr__(self):

@@ -8,7 +8,7 @@ import types
 import unittest
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 SOURCE = Path(__file__).parents[1] / "src/true_love_base"
@@ -101,6 +101,22 @@ class OfflineClientTests(unittest.TestCase):
 
         self.assertFalse(self.client.is_connected())
         sdk.SendMsg.assert_not_called()
+
+    def test_wechat_logged_in_to_another_account_is_not_adopted(self):
+        client = load_client_module(self.desktop).WxAutoClient(bot_id="wxid_m8s", account_of=lambda: "wxid_other")
+        self.desktop.log_in(new_sdk())
+
+        with self.assertLogs("WxAutoClient", level="WARNING") as logs:
+            self.assertFalse(client.connect())
+
+        self.assertFalse(client.is_connected())
+        self.assertIn("wxid_other", logs.output[0])
+
+    def test_wechat_logged_in_to_this_bot_is_adopted(self):
+        client = load_client_module(self.desktop).WxAutoClient(bot_id="wxid_m8s", account_of=lambda: "wxid_m8s")
+        self.desktop.log_in(new_sdk())
+
+        self.assertTrue(client.connect())
 
     def test_repeated_connect_failures_are_reported_once(self):
         with self.assertLogs("WxAutoClient", level="WARNING") as logs:
@@ -274,7 +290,7 @@ def group_message(content):
 
 
 class IdentityTests(unittest.TestCase):
-    """Messages are judged against the account that is logged in, and carry the machine that received them."""
+    """Messages are judged against the account that is logged in, and carry the bot that received them."""
 
     def setUp(self):
         self.desktop = WeChatDesktop()
@@ -289,7 +305,7 @@ class IdentityTests(unittest.TestCase):
         self.assertTrue(self.client.add_message_listener("room", lambda msg, chat: self.received.append(msg)))
         return sdk.AddListenChat.call_args.args[1]
 
-    def test_forwarded_message_names_the_machine_that_received_it(self):
+    def test_forwarded_message_names_the_bot_that_received_it(self):
         deliver = self.log_in_and_listen("kun jr")
 
         deliver(group_message("hello"), Mock(who="room"))
@@ -315,6 +331,67 @@ class IdentityTests(unittest.TestCase):
 
         self.assertEqual([m.bot_id for m in self.received], ["win11-ser", "win11-ser"])
         self.assertEqual([m.is_at_me for m in self.received], [False, True])
+
+
+class SendFileConfirmationTests(unittest.TestCase):
+    """SendFiles sometimes reports failure for a file that did go out; the chat listener has the final word."""
+
+    def setUp(self):
+        self.desktop = WeChatDesktop()
+        self.module = load_client_module(self.desktop)
+        self.client = self.module.WxAutoClient(bot_id="win10-m8s")
+        self.sdk = new_sdk()
+        self.window = Mock(who="room")
+        self.sdk.GetSubWindow.return_value = self.window
+        self.desktop.log_in(self.sdk)
+        self.assertTrue(self.client.connect())
+        self.assertTrue(self.client.add_message_listener("room", lambda msg, chat: None))
+        self.deliver = self.sdk.AddListenChat.call_args.args[1]
+        confirm = patch.object(self.module, "SEND_CONFIRM_SECONDS", 1)
+        confirm.start()
+        self.addCleanup(confirm.stop)
+
+    def own(self, kind, content):
+        return Mock(attr="self", type=kind, content=content)
+
+    def fail_but_show_up(self, message):
+        def send(path):
+            self.deliver(message, Mock(who="room"))
+            return False
+        self.window.SendFiles.side_effect = send
+
+    def test_image_that_shows_up_in_the_chat_counts_as_sent(self):
+        self.fail_but_show_up(self.own("image", "图片"))
+
+        with self.assertLogs("WxAutoClient", level="WARNING"):
+            self.assertTrue(self.client.send_file("room", "send-files/moyu.jpg"))
+
+    def test_file_counts_as_sent_only_when_its_name_shows_up(self):
+        self.fail_but_show_up(self.own("file", "文件\nother.pdf"))
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.assertFalse(self.client.send_file("room", "send-files/report.pdf"))
+
+        self.fail_but_show_up(self.own("file", "文件\nreport.pdf\n微信电脑版"))
+        self.assertTrue(self.client.send_file("room", "send-files/report.pdf"))
+
+    def test_failure_with_nothing_in_the_chat_is_a_failure(self):
+        self.window.SendFiles.return_value = False
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.assertFalse(self.client.send_file("room", "send-files/moyu.jpg"))
+
+    def test_our_own_earlier_image_does_not_confirm_a_later_send(self):
+        self.deliver(self.own("image", "图片"), Mock(who="room"))
+        self.window.SendFiles.return_value = False
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.assertFalse(self.client.send_file("room", "send-files/zaobao.jpg"))
+
+    def test_successful_send_does_not_wait(self):
+        self.window.SendFiles.return_value = True
+
+        self.assertTrue(self.client.send_file("room", "send-files/moyu.jpg"))
 
 
 class Timeline:
@@ -461,7 +538,7 @@ class RoutesTests(unittest.TestCase):
     def test_every_wechat_endpoint_reports_offline_instead_of_trying(self):
         requests = {
             "send_text": {"sendReceiver": "alice", "content": "hi"},
-            "send_file": {"sendReceiver": "alice", "path": "wx_imgs/missing.png"},
+            "send_file": {"sendReceiver": "alice", "url": "http://h-ser:8088/media/gen_img/missing.png"},
             "add_listen": {"nickname": "alice"},
             "execute_wx": {"name": "GetMyInfo"},
             "execute_chat": {"chat_name": "alice", "name": "ChatInfo"},
@@ -493,7 +570,7 @@ class RoutesTests(unittest.TestCase):
         self.assertEqual(response, {"code": 0, "message": "success", "data": None})
         self.robot.send_text_msg.assert_called_once_with("hi", "alice", None)
 
-    def test_text_for_the_master_goes_to_the_master_of_this_machine(self):
+    def test_text_for_the_master_goes_to_the_master_of_this_bot(self):
         self.log_in()
 
         response = asyncio.run(self.routes.send_text({"is_master": True, "content": "deployed"}))
@@ -508,22 +585,32 @@ class RoutesTests(unittest.TestCase):
 
         self.robot.send_text_msg.assert_called_once_with("hi", "master", None)
 
-    def test_file_for_the_master_goes_to_the_master_of_this_machine(self):
+    def test_file_for_the_master_goes_to_the_master_of_this_bot(self):
         self.log_in()
 
-        with patch.object(self.routes, "resolve_path", side_effect=lambda path: path):
-            response = asyncio.run(self.routes.send_file({"is_master": True, "path": "wx_imgs/report.png"}))
+        with patch.object(self.routes, "download", AsyncMock(return_value="send-files/report.png")) as download:
+            response = asyncio.run(self.routes.send_file({"is_master": True, "url": "http://h-ser:8088/media/gen_img/report.png"}))
 
         self.assertEqual(response, {"code": 0, "message": "success", "data": None})
-        self.robot.send_file_msg.assert_called_once_with("wx_imgs/report.png", "owner")
+        download.assert_awaited_once_with("http://h-ser:8088/media/gen_img/report.png", self.routes.SEND_FILES_DIR)
+        self.robot.send_file_msg.assert_called_once_with("send-files/report.png", "owner")
 
-    def test_message_for_the_master_is_refused_on_a_machine_without_one(self):
+    def test_file_that_cannot_be_downloaded_is_reported_as_not_sent(self):
+        self.log_in()
+
+        with patch.object(self.routes, "download", AsyncMock(side_effect=RuntimeError("HTTP 404"))):
+            response = asyncio.run(self.routes.send_file({"sendReceiver": "group", "url": "http://h-ser:8088/media/gen_img/x.png"}))
+
+        self.assertEqual(response, self.routes.ApiErrors.SEND_FAILED.to_dict())
+        self.robot.send_file_msg.assert_not_called()
+
+    def test_message_for_the_master_is_refused_for_a_bot_without_one(self):
         self.log_in()
         self.robot.master = ""
 
         response = asyncio.run(self.routes.send_text({"is_master": True, "content": "deployed"}))
 
-        self.assertEqual(response, {"code": 100, "message": "No master is configured for this machine", "data": None})
+        self.assertEqual(response, {"code": 100, "message": "No master is configured for this bot", "data": None})
         self.robot.send_text_msg.assert_not_called()
 
     def test_status_reports_wechat_offline_since_startup(self):

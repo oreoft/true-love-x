@@ -13,6 +13,9 @@ if TYPE_CHECKING:
 
 LOG = logging.getLogger("Server")
 
+# base 的 HTTP 端口，回调地址里也用它
+HTTP_PORT = 5000
+
 # 全局 Robot 实例
 _robot: Optional["Robot"] = None
 
@@ -22,7 +25,7 @@ def get_robot() -> Optional["Robot"]:
     return _robot
 
 
-def enable_http(robot: "Robot", host: str = "0.0.0.0", port: int = 5000) -> None:
+def enable_http(robot: "Robot", host: str = "0.0.0.0", port: int = HTTP_PORT) -> None:
     """
     启动 HTTP 服务（使用 Uvicorn）
 

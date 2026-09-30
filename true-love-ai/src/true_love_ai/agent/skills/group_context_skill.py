@@ -53,19 +53,18 @@ async def fetch_group_context(params: dict, ctx: dict) -> str:
         return "[fetch_group_context] 此工具仅适用于群聊场景"
 
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
     keyword = (params.get("keyword") or "").strip()
     limit = min(int(params.get("limit") or _DEFAULT_LIMIT), _MAX_LIMIT)
 
     from true_love_ai.agent.skills._group_message import fetch_group_messages
 
     if keyword:
-        raw = await fetch_group_messages(receiver, limit=_KEYWORD_FETCH, platform=platform)
+        raw = await fetch_group_messages(receiver, limit=_KEYWORD_FETCH)
         matched = [m for m in raw if keyword in m.get("content", "")]
         messages = matched[-_KEYWORD_RETURN:]
         LOG.info("fetch_group_context: keyword=%s, fetched=%d, matched=%d", keyword, len(raw), len(matched))
     else:
-        messages = await fetch_group_messages(receiver, limit=limit, platform=platform)
+        messages = await fetch_group_messages(receiver, limit=limit)
         LOG.info("fetch_group_context: no keyword, fetched=%d", len(messages))
 
     if not messages:

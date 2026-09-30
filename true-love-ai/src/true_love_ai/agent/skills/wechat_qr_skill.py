@@ -59,7 +59,6 @@ async def wechat_qr_connect(params: dict, ctx: dict) -> str:
     qr_url = qr_data.get("qrDataUrl", "")
     message = qr_data.get("message", "使用微信扫描以下二维码，以完成领养。")
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
     if qr_url and receiver:
         try:
             import io
@@ -83,8 +82,8 @@ async def wechat_qr_connect(params: dict, ctx: dict) -> str:
 
             filename = f"{uuid.uuid4().hex}.jpg"
             (GEN_IMG_DIR / filename).write_bytes(buf.getvalue())
-            await send_text(receiver, message, platform=platform)
-            await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}", platform=platform)
+            await send_text(receiver, message)
+            await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}")
             return "好的！二维码已发送，请用微信扫描完成领养哦~"
         except Exception as e:
             LOG.error("生成/发送二维码失败: %s", e)

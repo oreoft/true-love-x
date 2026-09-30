@@ -3,12 +3,6 @@
 
 # ==================== 服务基础配置 ====================
 
-# host: the server AI calls back when a trigger does not say where to reply (one server, or the main one).
-#       Servers that share this AI send their own address with every trigger, set in their admin console.
-base_server:
-  host: "http://localhost:8088"
-  lark_host: ""
-
 http:
   host: "0.0.0.0"
   port: 8088

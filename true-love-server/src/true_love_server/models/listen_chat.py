@@ -2,7 +2,7 @@
 """
 ListenChat 模型
 
-这台 server 对应的微信要监听的群和好友，一行一个，由 create_all() 统一建表。
+这个微信机器人要监听的群和好友，一行一个，由 create_all() 统一建表。
 """
 
 from datetime import datetime

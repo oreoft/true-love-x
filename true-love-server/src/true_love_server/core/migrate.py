@@ -9,41 +9,17 @@ Server DB 当前 Migration
 import sqlite3
 
 
-def _cols(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-
-
-# 多平台支持迁移
-VERSION = "001"
-DESCRIPTION = "multi_platform: add platform/sender_id/sender_name/chat_name, drop sender"
+# 每个机器人一个库以后，库里的聊天记录都来自同一个机器人，平台由机器人登记表决定，不再每行存一遍
+VERSION = "004"
+DESCRIPTION = "group_messages: drop the platform column"
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    """多平台支持：新增 platform/sender_id/sender_name/chat_name，回填，删旧列，建索引"""
-    existing = _cols(conn, "group_messages")
-
-    for col, typedef in [
-        ("platform",    "VARCHAR(32)  NOT NULL DEFAULT 'wechat'"),
-        ("sender_id",   "VARCHAR(128) NOT NULL DEFAULT ''"),
-        ("sender_name", "VARCHAR(128) NOT NULL DEFAULT ''"),
-        ("chat_name",   "VARCHAR(128) NOT NULL DEFAULT ''"),
-    ]:
-        if col not in existing:
-            conn.execute(f"ALTER TABLE group_messages ADD COLUMN {col} {typedef}")
-
-    if "sender" in existing:
-        conn.execute("UPDATE group_messages SET sender_id   = sender WHERE sender_id   = ''")
-        conn.execute("UPDATE group_messages SET sender_name = sender WHERE sender_name = ''")
-    conn.execute("UPDATE group_messages SET chat_name = chat_id WHERE chat_name = ''")
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_platform_chat ON group_messages (platform, chat_id)"
-    )
-
-    if "sender" in _cols(conn, "group_messages"):
-        # ix_group_messages_sender 索引引用了 sender 列，必须先删索引才能删列
-        conn.execute("DROP INDEX IF EXISTS ix_group_messages_sender")
-        conn.execute("ALTER TABLE group_messages DROP COLUMN sender")
+    """删掉 group_messages 的 platform 列和用到它的索引；新建的库本来就没有，跳过"""
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(group_messages)")}
+    conn.execute("DROP INDEX IF EXISTS idx_platform_chat")
+    if "platform" in columns:
+        conn.execute("ALTER TABLE group_messages DROP COLUMN platform")
 
 
 def run(db_path: str) -> None:

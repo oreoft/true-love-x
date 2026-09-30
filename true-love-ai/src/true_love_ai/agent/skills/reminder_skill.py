@@ -50,11 +50,10 @@ async def set_reminder(params: dict, ctx: dict) -> str:
 
     receiver = ctx.get("receiver", "")
     at_user = ctx.get("at_user", "")
-    platform = ctx.get("platform", "wechat")
     job_id = f"reminder_{receiver}_{int(time.time())}"
 
     from true_love_ai.agent.server_client import add_reminder
-    result = await add_reminder(job_id, iso_str, receiver, content, at_user, platform=platform)
+    result = await add_reminder(job_id, iso_str, receiver, content, at_user)
 
     if result.get("code") == 0:
         tz_display = dt.tzname() or f"UTC{dt.strftime('%z')}"
@@ -80,9 +79,8 @@ async def set_reminder(params: dict, ctx: dict) -> str:
 })
 async def query_reminder(params: dict, ctx: dict) -> str:
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
     from true_love_ai.agent.server_client import query_reminders
-    jobs = await query_reminders(receiver, platform=platform)
+    jobs = await query_reminders(receiver)
     if not jobs:
         return "暂未查到你在这个聊天中的待办提醒记录哦~"
     lines = [f"【{j['job_id']}】执行时间: {j['next_run_time']}" for j in jobs]

@@ -2,19 +2,22 @@
 """
 Server Client - 与后端 AI 服务通信
 
-负责把消息转发到服务端的 /on-message；服务端只确认收到，AI 回复由服务端异步回调 base 发送。
-连上微信时从服务端的 /listen/list 取监听列表。
+负责把消息转发到服务端的 /base/on-message；服务端只确认收到，AI 回复由服务端异步回调 base 发送。
+连上微信时从服务端的 /base/listen/list 取监听列表。
+每次请求都带上这个 base 的机器人信息（bot_id、回调地址、昵称），server 据此登记和回调。
 使用全局 httpx.Client 复用 HTTP 连接，线程安全的熔断器。
 """
 
 import logging
 import threading
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 import httpx
 
+from true_love_common.bot import BotInfo
 from true_love_common.chat_msg import ChatMsg
+from true_love_common.hosts import SERVER_HOST
 from true_love_common.http.client import post, post_json
 from true_love_base.configuration import Config
 from true_love_base.models.api import ChatRequest, ChatResponse
@@ -22,9 +25,22 @@ from true_love_base.models.api import ChatRequest, ChatResponse
 config = Config()
 LOG = logging.getLogger("ServerClient")
 
-# 服务端配置（config.yaml 的 server.host）
-SERVER_HOST = config.server_host.rstrip("/")
-CHAT_ENDPOINT = f"{SERVER_HOST}/on-message"
+# 所有 base 共用一个 server，地址写在 true_love_common.hosts
+CHAT_ENDPOINT = f"{SERVER_HOST}/base/on-message"
+
+# 当前登录的昵称，由 main 在创建微信客户端后接上
+_self_name: Callable[[], str] = lambda: ""
+
+
+def use_self_name(source: Callable[[], str]) -> None:
+    """报给 server 的昵称从哪里取"""
+    global _self_name
+    _self_name = source
+
+
+def bot_info() -> BotInfo:
+    """这个 base 的机器人信息，每次调 server 都带上"""
+    return BotInfo(bot_id=config.bot_id, platform="wechat", callback=config.callback, name=_self_name())
 
 # ==================== HTTP Client 连接复用 ====================
 
@@ -140,7 +156,7 @@ def get_chat(msg: ChatMsg) -> str:
 
     try:
         # 构建请求
-        request = ChatRequest(token=config.http_token, message=msg)
+        request = ChatRequest(token=config.http_token, bot=bot_info(), message=msg)
         payload = request.to_json()
 
         # 使用 HTTP client 发起请求（连接复用）
@@ -163,11 +179,11 @@ def get_chat(msg: ChatMsg) -> str:
             _circuit_breaker.record_success()
             return ""
         else:
-            LOG.error("Server /on-message returned business error: %s", resp_data)
+            LOG.error("Server /base/on-message returned business error: %s", resp_data)
             return _get_error_message()
 
     except Exception as e:
-        LOG.error("Server /on-message failed: %s", e)
+        LOG.error("Server /base/on-message failed: %s", e)
         _circuit_breaker.record_failure()
         return _get_error_message()
 
@@ -181,7 +197,7 @@ def _get_error_message() -> str:
 
 # ==================== 监听列表 ====================
 
-LISTEN_LIST_ENDPOINT = f"{SERVER_HOST}/listen/list"
+LISTEN_LIST_ENDPOINT = f"{SERVER_HOST}/base/listen/list"
 
 # 取监听列表的退避重试：机器重启后 base 往往比 Docker 里的 server 先起来
 LISTEN_FETCH_DEADLINE = 300  # 秒，过了就放弃，由 server 启动后补监听
@@ -191,7 +207,8 @@ LISTEN_FETCH_MAX_DELAY = 60
 
 def _get_listen_chats() -> list[str]:
     """向 server 取一次监听列表，失败时抛异常"""
-    response = post_json(LISTEN_LIST_ENDPOINT, {"token": config.http_token}, timeout=(2, 10), client=_get_client())
+    payload = {"token": config.http_token, "bot": bot_info().to_dict()}
+    response = post_json(LISTEN_LIST_ENDPOINT, payload, timeout=(2, 10), client=_get_client())
     response.raise_for_status()
     resp_data = response.data if isinstance(response.data, dict) else {}
     if resp_data.get("code") != 0:
