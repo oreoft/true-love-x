@@ -19,17 +19,16 @@ const points = (list) => (list || []).map((p) => `<span class="mono">${esc(p)}</
 const isOpen = (list) => (list || []).includes('*:*');
 const lines = (text) => text.split('\n').map((line) => line.trim()).filter(Boolean);
 
+let tab = 'builtin';
+
 export async function show(root) {
     const { builtin, installed, default_permissions: defaults } = await platformApi.skills();
     const reload = () => show(root);
     // 有限制的排前面，方便看谁被管着
     builtin.sort((a, b) => Number(isOpen(a.permissions)) - Number(isOpen(b.permissions)) || a.name.localeCompare(b.name));
 
-    root.innerHTML = `
-        <div class="head"><h2 class="grow">技能</h2><span class="tag">所有 bot 共用</span>
-            <button class="btn primary" id="add">添加技能</button></div>
-
-        <h3>内置技能</h3>
+    const restricted = builtin.filter((s) => !isOpen(s.permissions)).length;
+    const builtinTab = () => `
         <div class="table-wrap"><table>
             <thead><tr><th>技能</th><th>谁能用</th><th>操作</th></tr></thead>
             <tbody>${builtin.map((s, i) => `<tr>
@@ -39,9 +38,8 @@ export async function show(root) {
                 <td><button class="btn sm" data-builtin="${i}">改权限</button></td>
             </tr>`).join('')}</tbody></table></div>
         <div class="note">代码里新加的内置技能，第一次加载时给这些权限点：${points(defaults)}
-            <button class="btn sm" id="defaults" style="margin-left:8px">修改</button></div>
-
-        <h3>安装的技能</h3>
+            <button class="btn sm" id="defaults" style="margin-left:8px">修改</button></div>`;
+    const installedTab = () => `
         ${installed.length ? `<div class="table-wrap"><table>
             <thead><tr><th>ID</th><th>名称</th><th>命令</th><th>谁能用</th><th>调用</th><th>最近使用</th><th>操作</th></tr></thead>
             <tbody>${installed.map((s, i) => `<tr>
@@ -53,10 +51,21 @@ export async function show(root) {
                     <button class="btn sm danger" data-delete="${i}">删除</button></div></td>
             </tr>`).join('')}</tbody></table></div>`
         : '<div class="empty">还没有安装的技能。在聊天里让机器人保存一段命令，或者点「添加技能」。</div>'}
-        <div class="note">${HELP}<br>聊天里安装的技能：群里装的默认只在这个群能用，私聊装的默认在这个号能用。</div>`;
+        <div class="note">聊天里安装的技能：群里装的默认只在这个群能用，私聊装的默认在这个号能用。</div>`;
 
-    $('#add', root).onclick = () => form(null, defaults, reload);
-    $('#defaults', root).onclick = () => pointsForm('新内置技能的默认权限点', defaults,
+    root.innerHTML = `
+        <div class="head"><h2 class="grow">技能</h2><span class="tag">所有 bot 共用</span>
+            ${tab === 'installed' ? '<button class="btn primary" id="add">添加技能</button>' : ''}</div>
+        <div class="tabs" role="tablist">
+            <button class="tab" role="tab" data-tab="builtin" aria-selected="${tab === 'builtin'}">内置 ${builtin.length}${restricted ? `（${restricted} 个有限制）` : ''}</button>
+            <button class="tab" role="tab" data-tab="installed" aria-selected="${tab === 'installed'}">安装的 ${installed.length}</button>
+        </div>
+        ${tab === 'builtin' ? builtinTab() : installedTab()}
+        <div class="note">${HELP}</div>`;
+
+    $$('[data-tab]', root).forEach((el) => { el.onclick = () => { tab = el.dataset.tab; reload(); }; });
+    if ($('#add', root)) $('#add', root).onclick = () => form(null, defaults, reload);
+    if ($('#defaults', root)) $('#defaults', root).onclick = () => pointsForm('新内置技能的默认权限点', defaults,
         (list) => platformApi.defaultPermissionsSave(list), reload);
     $$('[data-builtin]', root).forEach((el) => {
         const skill = builtin[el.dataset.builtin];
