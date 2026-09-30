@@ -1,8 +1,8 @@
 /**
- * 人设：机器人回复用的 system prompt 和语音风格，存在 AI 库里；请求经 server 转发给 AI 的管理接口
+ * 人设：这个 bot 回复用的 system prompt 和语音风格，存在 AI 库里；请求经 server 转发给 AI 的管理接口
  *
- * 三层，从小到大找，每一项各自取第一个填了的：
- *   这个 bot 里的某个群或人 → 这个 bot 的默认 → 所有 bot 共用的默认
+ * 一份默认人设，加上按群或人单独指定的；单独指定里没填的项沿用默认。
+ * bot 还没改过默认人设时，用的是上线时从旧配置导入的初始人设（AI 那边 bot_id="*" 的那份），这里只展示不单独管理。
  * prompt 里写 {name}，回复时换成 bot 的昵称。
  */
 
@@ -11,76 +11,80 @@ import { $, $$, attempt, closeModal, confirmModal, esc, modal, toast } from '../
 
 const ALL_BOTS = '*';
 
+const clip = (text, max) => {
+    const flat = String(text || '').replace(/\s+/g, ' ').trim();
+    return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+};
+
 export async function show(root, ctx) {
     const bot = ctx.bot;
     const api = botApi(bot.bot_id);
     const { personas, fallback_prompt: fallbackPrompt } = await api.personas();
-    const shared = personas.find((p) => p.bot_id === ALL_BOTS && !p.chat);
+    const initial = personas.find((p) => p.bot_id === ALL_BOTS && !p.chat);
     const own = personas.find((p) => p.bot_id === bot.bot_id && !p.chat);
     const chats = personas.filter((p) => p.bot_id === bot.bot_id && p.chat);
     const botName = bot.name || bot.bot_id;
     const reload = () => show(root, ctx);
-
-    const text = (value, empty) => value ? `<div class="wrap" style="white-space:pre-wrap">${esc(value)}</div>` : `<div class="muted">${empty}</div>`;
-    const block = (title, tag, persona, key, emptyPrompt) => `
-        <div class="card" style="cursor:default">
-            <div class="card-top"><b>${title}</b>${tag}
-                <div class="actions" style="margin-left:auto"><button class="btn sm" data-edit="${key}">修改</button>
-                ${persona ? `<button class="btn sm danger" data-delete="${key}">清空</button>` : ''}</div></div>
-            <div class="muted" style="font-size:12px">prompt</div>${text(persona && persona.prompt, emptyPrompt)}
-            <div class="muted" style="font-size:12px">语音风格</div>${text(persona && persona.voice_style, '没填，沿用上一级')}
-        </div>`;
+    // 默认人设现在实际生效的内容：bot 自己改过的优先，没改的项用初始人设
+    const current = {
+        prompt: (own && own.prompt) || (initial && initial.prompt) || fallbackPrompt,
+        voice_style: (own && own.voice_style) || (initial && initial.voice_style) || '',
+    };
+    const text = (value, empty) => value
+        ? `<div class="wrap" style="white-space:pre-wrap">${esc(value)}</div>` : `<div class="muted">${empty}</div>`;
 
     root.innerHTML = `
-        <div class="head"><h2 class="grow">人设 · ${esc(botName)}</h2>
-            <button class="btn primary" id="add">给群或人指定</button></div>
-        <div class="cards">
-            ${block(`${esc(botName)} 的默认`, '', own, 'own', '没填，用所有 bot 共用的')}
-            ${block('所有 bot 共用的默认', '<span class="tag">所有 bot</span>', shared, 'shared', `没填，用代码里的兜底：${esc(fallbackPrompt)}`)}
+        <div class="head"><h2 class="grow">人设 · ${esc(botName)}</h2></div>
+        <div class="card" style="cursor:default">
+            <div class="card-top"><b>默认人设</b>${own ? '' : '<span class="tag">初始人设</span>'}
+                <div class="actions" style="margin-left:auto"><button class="btn sm" id="editDefault">修改</button>
+                ${own ? '<button class="btn sm" id="resetDefault">恢复初始</button>' : ''}</div></div>
+            <div class="muted" style="font-size:12px">prompt</div>${text(current.prompt, '—')}
+            <div class="muted" style="font-size:12px">语音风格</div>${text(current.voice_style, '没填，按模型默认的音色')}
         </div>
-        <h3>按群或人指定</h3>
+
+        <div class="head"><h3 class="grow">按群或人单独指定</h3>
+            <button class="btn primary" id="add">添加</button></div>
         ${chats.length ? `<div class="table-wrap"><table>
-            <thead><tr><th>群或人</th><th>prompt</th><th>语音风格</th><th>操作</th></tr></thead>
+            <thead><tr style="white-space:nowrap"><th>群或人</th><th>prompt</th><th>语音风格</th><th>操作</th></tr></thead>
             <tbody>${chats.map((p, i) => `<tr>
-                <td><b>${esc(p.chat)}</b></td>
-                <td class="wrap">${esc(p.prompt) || '<span class="muted">沿用默认</span>'}</td>
-                <td class="wrap">${esc(p.voice_style) || '<span class="muted">沿用默认</span>'}</td>
-                <td><div class="actions"><button class="btn sm" data-edit="chat-${i}">修改</button>
-                    <button class="btn sm danger" data-delete="chat-${i}">删除</button></div></td>
+                <td style="white-space:nowrap"><b>${esc(p.chat)}</b></td>
+                <td title="${esc(p.prompt)}">${esc(clip(p.prompt, 40)) || '<span class="muted">沿用默认</span>'}</td>
+                <td title="${esc(p.voice_style)}">${esc(clip(p.voice_style, 20)) || '<span class="muted">沿用默认</span>'}</td>
+                <td><div class="actions" style="flex-wrap:nowrap"><button class="btn sm" data-edit="${i}">修改</button>
+                    <button class="btn sm danger" data-delete="${i}">删除</button></div></td>
             </tr>`).join('')}</tbody></table></div>`
         : '<div class="empty">还没有单独指定的群或人，都用默认人设。</div>'}
-        <div class="note">prompt 里写 {name}，回复时换成 bot 的昵称（现在是「${esc(bot.name || '还不知道')}」），同一份人设给不同的号用不会叫错名字。
-            群或人按微信里显示的群名、昵称填。改完下一条消息就生效。</div>`;
+        <div class="note">prompt 里写 {name}，回复时换成 bot 的昵称（现在是「${esc(bot.name || '还不知道')}」）。
+            群或人按微信里显示的群名、昵称填；单独指定里没填的项沿用默认人设。改完下一条消息就生效。</div>`;
 
-    const targets = {
-        own: { persona: own, scope: {} },
-        shared: { persona: shared, scope: { all_bots: true } },
-    };
-    chats.forEach((p, i) => { targets[`chat-${i}`] = { persona: p, scope: { chat: p.chat } }; });
-
-    $('#add', root).onclick = () => form(api, { title: '给群或人指定人设', scope: {}, newChat: true }, reload);
+    $('#editDefault', root).onclick = () => form(api, { title: '默认人设', scope: {}, persona: current }, reload);
+    if ($('#resetDefault', root)) {
+        $('#resetDefault', root).onclick = () => confirmModal('恢复初始人设',
+            '会删掉这个 bot 改过的默认人设，改回初始人设。', async () => {
+                if (await attempt(() => api.personaDelete({}), '已恢复') !== undefined) reload();
+            }, '恢复');
+    }
+    $('#add', root).onclick = () => form(api, { title: '给群或人单独指定人设', scope: {}, newChat: true }, reload);
     $$('[data-edit]', root).forEach((el) => {
-        const key = el.dataset.edit;
-        const target = targets[key];
-        const title = key === 'own' ? `${botName} 的默认` : key === 'shared' ? '所有 bot 共用的默认' : `群或人：${target.scope.chat}`;
-        el.onclick = () => form(api, { ...target, title }, reload);
+        const p = chats[el.dataset.edit];
+        el.onclick = () => form(api, { title: `群或人：${p.chat}`, scope: { chat: p.chat }, persona: p }, reload);
     });
     $$('[data-delete]', root).forEach((el) => {
-        const target = targets[el.dataset.delete];
-        const what = target.scope.chat ? `「${target.scope.chat}」的人设` : '这份默认人设';
-        el.onclick = () => confirmModal('删除人设', `删除${what}后会沿用上一级。`, async () => {
-            if (await attempt(() => api.personaDelete(target.scope), '已删除') !== undefined) reload();
+        const p = chats[el.dataset.delete];
+        el.onclick = () => confirmModal('删除人设', `删除后「${p.chat}」用默认人设。`, async () => {
+            if (await attempt(() => api.personaDelete({ chat: p.chat }), '已删除') !== undefined) reload();
         }, '删除');
     });
 }
 
-/** target：{ title, scope（all_bots 或 chat）, persona（已有的内容）, newChat（新指定一个群或人） } */
+/** target：{ title, scope（chat 或空）, persona（已有的内容）, newChat（新指定一个群或人） } */
 function form(api, { title, scope, persona, newChat }, reload) {
     modal(`<h3>${esc(title)}</h3>
         ${newChat ? '<div class="field"><label for="fChat">群名或好友昵称</label><input id="fChat" placeholder="和微信里显示的一致"></div>' : ''}
-        <div class="field"><label for="fPrompt">prompt（空表示沿用上一级）</label>
+        <div class="field"><label for="fPrompt">prompt${newChat || scope.chat ? '（空表示沿用默认）' : ''}</label>
             <textarea id="fPrompt" rows="8" placeholder="你是智能聊天机器人，你的名字叫{name}……">${esc(persona ? persona.prompt : '')}</textarea></div>
-        <div class="field"><label for="fVoice">语音风格（空表示沿用上一级）</label>
+        <div class="field"><label for="fVoice">语音风格${newChat || scope.chat ? '（空表示沿用默认）' : ''}</label>
             <textarea id="fVoice" rows="3" placeholder="请用……的音色朗读：">${esc(persona ? persona.voice_style : '')}</textarea></div>
         <div class="foot"><button class="btn" data-close>取消</button><button class="btn primary" id="save">保存</button></div>`);
     $('#save').onclick = async (e) => {
