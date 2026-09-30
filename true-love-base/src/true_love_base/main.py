@@ -20,7 +20,7 @@ from true_love_base.services import server_client
 from true_love_base.services.robot import Robot
 from true_love_base.services.wx_supervisor import WxSupervisor
 from true_love_base.utils.tailnet import tailnet_ip
-from true_love_base.utils.win_env import display_scale_percent, keep_awake
+from true_love_base.utils.win_env import keep_awake
 
 # 初始化配置（会设置日志）
 config = Config()
@@ -165,11 +165,6 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
             startup_msg += f"\n\n监听失败 ({len(failed_chats)}个):\n{failed_list_str}"
         if unavailable:
             startup_msg += "\n\n没从 server 取到监听列表，暂时不监听任何聊天；server 启动后会自动补上"
-
-        scale = display_scale_percent()
-        if scale is not None and scale != 100:
-            LOG.warning(f"Display scaling is {scale}%, wxautox4 needs 100%")
-            startup_msg += f"\n\n屏幕缩放是 {scale}%，请调成 100%，否则下载图片等操作可能失败"
 
         if not robot.send_text_msg(startup_msg, robot.master):
             LOG.warning("Startup notification was not delivered to [%s]", robot.master)

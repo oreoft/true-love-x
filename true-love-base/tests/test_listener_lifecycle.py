@@ -65,7 +65,7 @@ class ListenerLifecycleTests(unittest.TestCase):
             ),
             "true_love_base.utils.tailnet": module("true_love_base.utils.tailnet", tailnet_ip=Mock()),
             "true_love_base.utils.win_env": module(
-                "true_love_base.utils.win_env", keep_awake=lambda: None, display_scale_percent=lambda: 100
+                "true_love_base.utils.win_env", keep_awake=lambda: None
             ),
             "true_love_base.configuration": module(
                 "true_love_base.configuration",
@@ -356,27 +356,6 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         started = robot.send_text_msg.call_args_list[0].args[0]
         self.assertIn("没从 server 取到监听列表", started)
-
-    def test_startup_notice_warns_when_display_scaling_is_not_standard(self):
-        with (
-            patch.object(self.main_module, "display_scale_percent", return_value=225),
-            self.assertLogs("Main", level="WARNING"),
-        ):
-            robot = self.run_main()
-
-        started = robot.send_text_msg.call_args_list[0].args[0]
-        self.assertIn("started successfully", started)
-        self.assertIn("225%", started)
-
-    def test_startup_notice_is_silent_about_standard_or_unknown_scaling(self):
-        for scale in (100, None):
-            with self.subTest(scale=scale):
-                self.events.clear()
-                with patch.object(self.main_module, "display_scale_percent", return_value=scale):
-                    robot = self.run_main()
-
-                started = robot.send_text_msg.call_args_list[0].args[0]
-                self.assertNotIn("%", started)
 
     def test_base_keeps_the_machine_awake_while_it_runs(self):
         with patch.object(self.main_module, "keep_awake") as keep_awake:
