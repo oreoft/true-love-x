@@ -27,8 +27,27 @@ const lines = (text) => text.split('\n').map((line) => line.trim()).filter(Boole
 let tab = 'builtin';
 
 export async function show(root) {
-    const { builtin, installed, default_permissions: defaults } = await platformApi.skills();
-    const reload = () => show(root);
+    render(root, await platformApi.skills());
+}
+
+/** 重新拉数据：AI 那边比较慢，拉的时候页面变灰、按钮点不了 */
+async function reload(root) {
+    root.style.opacity = '0.5';
+    root.style.pointerEvents = 'none';
+    try {
+        render(root, await platformApi.skills());
+    } catch (e) {
+        toast(e.message, 'error');
+    } finally {
+        root.style.opacity = '';
+        root.style.pointerEvents = '';
+    }
+}
+
+/** 切 tab 只重画，不重新拉数据 */
+function render(root, data) {
+    const { builtin, installed, default_permissions: defaults } = data;
+    const refresh = () => reload(root);
     // 有限制的排前面，方便看谁被管着
     builtin.sort((a, b) => Number(isOpen(a.permissions)) - Number(isOpen(b.permissions)) || a.name.localeCompare(b.name));
 
@@ -69,20 +88,20 @@ export async function show(root) {
         ${tab === 'builtin' ? builtinTab() : installedTab()}
         <div class="note">${HELP}</div>`;
 
-    $$('[data-tab]', root).forEach((el) => { el.onclick = () => { tab = el.dataset.tab; reload(); }; });
-    if ($('#add', root)) $('#add', root).onclick = () => form(null, defaults, reload);
+    $$('[data-tab]', root).forEach((el) => { el.onclick = () => { tab = el.dataset.tab; render(root, data); }; });
+    if ($('#add', root)) $('#add', root).onclick = () => form(null, defaults, refresh);
     if ($('#defaults', root)) $('#defaults', root).onclick = () => pointsForm('新内置技能的默认权限点', defaults,
-        (list) => platformApi.defaultPermissionsSave(list), reload);
+        (list) => platformApi.defaultPermissionsSave(list), refresh);
     $$('[data-builtin]', root).forEach((el) => {
         const skill = builtin[el.dataset.builtin];
         el.onclick = () => pointsForm(`谁能用 · ${skill.name}`, skill.permissions,
-            (list) => platformApi.skillPermissionsSave(skill.name, list), reload, skill.description);
+            (list) => platformApi.skillPermissionsSave(skill.name, list), refresh, skill.description);
     });
-    $$('[data-edit]', root).forEach((el) => { el.onclick = () => form(installed[el.dataset.edit], defaults, reload); });
+    $$('[data-edit]', root).forEach((el) => { el.onclick = () => form(installed[el.dataset.edit], defaults, refresh); });
     $$('[data-delete]', root).forEach((el) => {
         const skill = installed[el.dataset.delete];
         el.onclick = () => confirmModal('删除技能', `确定要删除技能「${skill.name || skill.id}」吗？`, async () => {
-            if (await attempt(() => platformApi.skillDelete(skill.id), '技能已删除') !== undefined) reload();
+            if (await attempt(() => platformApi.skillDelete(skill.id), '技能已删除') !== undefined) refresh();
         }, '删除');
     });
 }
@@ -99,8 +118,10 @@ function pointsForm(title, current, save, reload, description = '') {
         const list = lines($('#fPoints').value);
         if (!list.length) { toast('至少写一个权限点；所有人都能用就写 *:*', 'error'); return; }
         e.target.disabled = true;
+        e.target.textContent = '保存中…';
         const done = await attempt(() => save(list), '权限已保存');
         e.target.disabled = false;
+        e.target.textContent = '保存';
         if (done !== undefined) { closeModal(); reload(); }
     };
 }
@@ -142,8 +163,10 @@ function form(skill, defaults, reload) {
         }
         if (!payload.permissions.length) { toast('至少写一个权限点；所有人都能用就写 *:*', 'error'); return; }
         e.target.disabled = true;
+        e.target.textContent = '保存中…';
         const done = await attempt(() => platformApi.skillSave(payload), skill ? '技能已修改' : '技能已添加');
         e.target.disabled = false;
+        e.target.textContent = '保存';
         if (done !== undefined) { closeModal(); reload(); }
     };
 }
