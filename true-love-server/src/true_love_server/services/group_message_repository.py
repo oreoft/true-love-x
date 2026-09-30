@@ -103,6 +103,8 @@ class GroupMessageRepository:
                     "content": msg.content,
                     "is_at_me": msg.is_at_me,
                     "created_at": msg.created_at.strftime('%Y-%m-%d %H:%M:%S') if msg.created_at else None,
+                    # 带时区的时间，tl-admin 按浏览器本地时间显示；库里存的是 server 所在时区的本地时间
+                    "created_at_iso": msg.created_at.astimezone().isoformat(timespec="seconds") if msg.created_at else None,
                 }
                 for msg in messages
             ]

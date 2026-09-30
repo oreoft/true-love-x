@@ -72,6 +72,13 @@ class MessageTests(ServerCase):
         self.assertEqual([m["content"] for m in second["messages"]], ["bye 2", "hello 3"])
         self.assertEqual(([m["content"] for m in last["messages"]], last["next_tail_id"]), (["hello 1"], None))
 
+    def test_messages_carry_a_time_with_its_offset_for_the_browser(self):
+        from datetime import datetime
+
+        [msg] = self.get("/admin/bots/wxid_m8s/messages", chat_id="群B")["data"]["messages"]
+
+        self.assertIsNotNone(datetime.fromisoformat(msg["created_at_iso"]).tzinfo)
+
     def test_keyword_filters_the_page(self):
         data = self.get("/admin/bots/wxid_m8s/messages", chat_id="群A", keyword="bye")["data"]
 

@@ -68,6 +68,14 @@ export function shortTime(iso) {
     return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+/** ISO 时间 → 浏览器本地时间 "YYYY-MM-DD HH:mm:ss" */
+export function localTime(iso) {
+    if (!iso) return '—';
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
 /** ISO 时间 → datetime-local 输入框的值（本地时区） */
 export function isoToLocalInput(iso) {
     const d = new Date(iso);

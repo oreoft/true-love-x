@@ -3,7 +3,7 @@
  */
 
 import { botApi } from '../api.js';
-import { $, $$, esc, highlight } from '../ui.js';
+import { $, $$, esc, highlight, localTime } from '../ui.js';
 
 const PAGE_SIZE = 40;
 // 离顶部多少像素时加载更早的一页
@@ -82,7 +82,7 @@ export async function show(root, ctx) {
 
     const renderMessage = (msg) => `
         <div class="msg ${msg.is_at_me ? 'at' : ''}">
-            <div class="meta"><span>${esc(msg.sender_name || msg.sender_id)}</span><span class="mono">${esc(msg.created_at)}</span>
+            <div class="meta"><span>${esc(msg.sender_name || msg.sender_id)}</span><span class="mono">${esc(localTime(msg.created_at_iso))}</span>
                 ${TYPE_NAMES[msg.msg_type] ? `<span class="tag">${TYPE_NAMES[msg.msg_type]}</span>` : ''}
                 <span class="mono">#${msg.id}</span></div>
             <div class="body">${highlight(msg.content || '', state.keyword)}</div>
