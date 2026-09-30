@@ -87,6 +87,7 @@ class AgentLoop:
         # 开始 Agent Loop
         messages = session.get_messages_for_llm(access)
         reply = None
+        last_tool_result = ""
 
         for iteration in range(MAX_TOOL_ITERATIONS):
             try:
@@ -101,6 +102,11 @@ class AgentLoop:
 
             if result_type == "text":
                 reply = result
+                # 模型调完技能偶尔只回空文本，用户就什么也收不到；这时把技能自己的结果发出去
+                if not (reply or "").strip():
+                    LOG.warning("LLM 返回空回复 (iteration=%d)，%s", iteration,
+                                "改发技能结果" if last_tool_result else "改发兜底回复")
+                    reply = last_tool_result or "嗯嗯，收到啦~"
                 break
 
             # result_type == "tool_calls"
@@ -131,6 +137,7 @@ class AgentLoop:
                 for tc in tool_calls
             ])
             for tc, tool_result in zip(tool_calls, tool_results):
+                last_tool_result = tool_result
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
