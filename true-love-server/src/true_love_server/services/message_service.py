@@ -2,8 +2,8 @@
 """
 Message Service - base 转来的消息
 
-所有消息存进机器人自己的库；@ 机器人或私聊的消息交给 AI。AI 没接住时由 server 直接回一句，
-免得用户以为机器人假死。
+所有消息存进机器人自己的库；@ 机器人或私聊的消息交给 AI，同一个人找得太频繁时只入库（见 ai_rate_limit）。
+AI 没接住时由 server 直接回一句，免得用户以为机器人假死。
 """
 
 import asyncio
@@ -12,7 +12,7 @@ import logging
 from true_love_common.chat_msg import ChatMsg
 from true_love_common.media import attach_urls
 
-from . import base_client
+from . import ai_rate_limit, base_client
 from .ai_client import business as ai
 from .bot_registry import BotRecord
 from .group_message_repository import GroupMessageRepository
@@ -34,6 +34,12 @@ async def handle_incoming(bot: BotRecord, msg: ChatMsg) -> None:
         return
 
     if msg.is_at_me or not msg.is_group:
+        decision = ai_rate_limit.check(bot.bot_id, msg.chat_id, msg.sender_id)
+        if decision != ai_rate_limit.ALLOW:
+            LOG.warning("找 AI 太频繁，只入库: bot_id=%s chat=%s sender_id=%s", bot.bot_id, msg.chat_id, msg.sender_id)
+            if decision == ai_rate_limit.NOTIFY:
+                await _reply(bot, msg, ai_rate_limit.BUSY_REPLY)
+            return
         try:
             await asyncio.to_thread(_trigger_ai, bot, msg)
         except Exception as e:
@@ -58,8 +64,13 @@ def _trigger_ai(bot: BotRecord, msg: ChatMsg) -> None:
 
 
 async def _send_ai_unavailable(bot: BotRecord, msg: ChatMsg) -> None:
+    await _reply(bot, msg, AI_UNAVAILABLE_REPLY)
+
+
+async def _reply(bot: BotRecord, msg: ChatMsg, content: str) -> None:
+    """由 server 直接回复这条消息：群里 @ 发送者，私聊直接回"""
     receiver = msg.chat_id if msg.is_group else msg.sender_id
     at_user = msg.sender_id if msg.is_group else ""
-    ok, err = await base_client.send_text(bot.bot_id, receiver, at_user, AI_UNAVAILABLE_REPLY)
+    ok, err = await base_client.send_text(bot.bot_id, receiver, at_user, content)
     if not ok:
-        LOG.error("AI 不可用提示发送失败: bot_id=%s receiver=%s err=%s", bot.bot_id, receiver, err)
+        LOG.error("server 回复发送失败: bot_id=%s receiver=%s err=%s", bot.bot_id, receiver, err)

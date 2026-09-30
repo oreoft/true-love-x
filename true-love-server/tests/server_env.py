@@ -33,7 +33,7 @@ try:
 
     from true_love_server.api import create_app
     from true_love_server.core import db_engine
-    from true_love_server.services import bot_registry, scheduler_service
+    from true_love_server.services import ai_rate_limit, bot_registry, scheduler_service
     from true_love_server.services.ai_client import business as ai_business
     from true_love_server.services.base_client import _client as base_http
 finally:
@@ -93,6 +93,7 @@ class ServerCase(unittest.TestCase):
         self.data_dir = Path(data_dir.name)
         db_engine.reset()
         bot_registry.reset()
+        ai_rate_limit.reset()
         dbs = patch.object(db_engine, "DBS_DIR", self.data_dir)
         dbs.start()
         self.addCleanup(dbs.stop)
