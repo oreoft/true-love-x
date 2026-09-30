@@ -51,8 +51,8 @@ def create_app() -> FastAPI:
     application.add_middleware(
         HttpLoggingMiddleware,
         service_name="tl-ai",
-        # /admin 是 tl-admin 经 server 转发过来的后台请求，不记日志（server 那边也不记）
-        skip_paths={"/health", "/admin"},
+        # 健康检查（server 每分钟探一次 /）和 tl-admin 经 server 转发过来的 /admin 请求不记日志
+        skip_paths={"/", "/ping", "/health", "/admin"},
         max_response_body_chars=200,
     )
     setup_exception_handlers(application, internal_message="发生未知错误, 稍后再试试捏")
