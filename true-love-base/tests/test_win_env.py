@@ -16,9 +16,23 @@ class DisplayScaleTests(unittest.TestCase):
         self.registry.OpenKey = MagicMock()
         self.registry.QueryValueEx = Mock()
 
-    def read_scale(self, platform="win32"):
-        with patch.object(sys, "platform", platform), patch.dict(sys.modules, {"winreg": self.registry}):
+    def read_scale(self, platform="win32", monitor_dpi=None):
+        with patch.object(sys, "platform", platform), patch.dict(sys.modules, {"winreg": self.registry}), \
+                patch.object(win_env, "_monitor_dpi", Mock(return_value=monitor_dpi)):
             return win_env.display_scale_percent()
+
+    def test_current_monitor_scaling_wins_over_the_value_applied_at_sign_in(self):
+        self.registry.QueryValueEx.return_value = (216, 4)
+
+        self.assertEqual(self.read_scale(monitor_dpi=192), 200)
+        self.registry.OpenKey.assert_not_called()
+
+    def test_monitor_that_cannot_be_read_falls_back_to_the_registry(self):
+        self.registry.QueryValueEx.return_value = (216, 4)
+
+        with patch.object(sys, "platform", "win32"), patch.dict(sys.modules, {"winreg": self.registry}), \
+                patch.object(win_env, "_monitor_dpi", Mock(side_effect=OSError("no shcore"))):
+            self.assertEqual(win_env.display_scale_percent(), 225)
 
     def test_scaling_is_reported_as_a_percentage(self):
         for dpi, percent in [(96, 100), (120, 125), (144, 150), (168, 175), (192, 200)]:
