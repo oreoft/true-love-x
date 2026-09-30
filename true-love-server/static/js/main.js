@@ -84,6 +84,9 @@ function renderNav() {
     html += '<div class="nav-group">平台</div>';
     for (const [page, info] of Object.entries(PLATFORM_PAGES)) html += link(page, info.label);
     $('#nav').innerHTML = html;
+    // 手机上导航是横向滑动的一行，把当前页滚到能看见的位置
+    const current = $('#nav [aria-current="page"]');
+    if (current) current.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 // ==================== 渲染 ====================

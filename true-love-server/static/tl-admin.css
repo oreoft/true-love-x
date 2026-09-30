@@ -173,10 +173,22 @@ td.wrap { max-width: 320px; overflow-wrap: anywhere; }
 .toast.error { background: var(--bad); color: #fff; }
 
 @media (max-width: 760px) {
-    .shell { grid-template-columns: 1fr; }
-    nav { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); padding: 8px 16px; gap: 4px; }
+    /* 手机上导航变成顶部一行可横向滑动的标签，内容区占满剩下的高度 */
+    .shell { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+    nav { flex-direction: row; align-items: center; overflow-x: auto;
+        border-right: 0; border-bottom: 1px solid var(--line); padding: 6px 12px; gap: 4px; scrollbar-width: none; }
+    nav::-webkit-scrollbar { display: none; }
     .nav-group { display: none; }
-    .nav-item { white-space: nowrap; }
+    .nav-item { flex: none; white-space: nowrap; gap: 6px; padding: 6px 12px; border-radius: 999px; }
+    .brand { font-size: 15px; }
+    .sw-btn { padding: 5px 10px; }
+    .head h2 { font-size: 17px; }
+    .head .btn { padding: 4px 10px; }
+    .kv strong { font-size: 16px; }
+    .listen-grid { grid-template-columns: 1fr; }
+    .add { min-height: 64px; }
+    .jump { right: 12px; bottom: 16px; }
+    .modal { padding: 16px; }
     main { padding: 16px; }
     .chat { grid-template-columns: 1fr; height: auto; }
     .conv-list { display: flex; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
