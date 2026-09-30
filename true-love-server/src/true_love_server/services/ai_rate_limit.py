@@ -16,7 +16,7 @@ from dataclasses import dataclass
 
 LIMIT = 5
 WINDOW_SECONDS = 60
-BUSY_REPLY = "你问的太频繁了，我暂时要休息一会"
+BUSY_REPLY = "呜哇~你问得太快啦，本酱的小脑袋要冒烟了，先让我歇一会儿捏~ (｡•́︿•̀｡)"
 
 ALLOW = "allow"
 NOTIFY = "notify"
