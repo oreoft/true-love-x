@@ -91,6 +91,8 @@ class BaseClient:
         """base 报告的在线状态；连不上时返回 {"reachable": False}"""
         try:
             res = await async_get(f"{self.host}/status", timeout=_STATUS_TIMEOUT)
+            if not res.status_code:  # 连接都没建立起来
+                return {"reachable": False, "online": False, "message": res.error or res.text}
             ok, message = api_response_ok(res)
             if not ok:
                 return {"reachable": True, "online": False, "message": message}

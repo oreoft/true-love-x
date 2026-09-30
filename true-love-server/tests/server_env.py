@@ -78,7 +78,9 @@ class FakeBases:
         host = url.rsplit("/status", 1)[0]
         status = self.statuses.get(host)
         if status is None:
-            raise ConnectionError("refused")
+            # the real client reports a failed connection instead of raising
+            return HttpResult(method="GET", url=url, ok=False, status_code=0, headers={}, text="", content=b"",
+                              data=None, cost_ms=1, error="ConnectError('All connection attempts failed')")
         return http_result(url, {"code": 0, "data": status}, method="GET")
 
 
