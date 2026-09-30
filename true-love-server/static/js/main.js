@@ -3,7 +3,7 @@
  *
  * 页面分三类：
  * - 全部 bot：总览
- * - 当前 bot：聊天记录、提醒与定时任务、监听（只有能力列表里有 listen 的机器人才显示）、人设、技能权限
+ * - 当前 bot：聊天记录、提醒与定时任务、监听（只有能力列表里有 listen 的机器人才显示）、人设
  * - 平台：技能、模型、日志
  */
 
@@ -16,7 +16,6 @@ import * as listen from './pages/listen.js';
 import * as skills from './pages/skills.js';
 import * as models from './pages/models.js';
 import * as persona from './pages/persona.js';
-import * as permissions from './pages/permissions.js';
 import * as logs from './pages/logs.js';
 
 const BOT_PAGES = {
@@ -24,7 +23,6 @@ const BOT_PAGES = {
     schedule: { module: schedule, label: '提醒与定时任务' },
     listen: { module: listen, label: '监听管理', capability: 'listen', tag: '微信' },
     persona: { module: persona, label: '人设' },
-    permissions: { module: permissions, label: '技能权限' },
 };
 const PLATFORM_PAGES = {
     skills: { module: skills, label: '技能' },

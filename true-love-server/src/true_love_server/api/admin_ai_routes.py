@@ -2,11 +2,10 @@
 """
 Admin AI Routes - tl-admin 里存在 AI 那边的设置，原样转发给 AI 的管理接口
 
-- /admin/skill/*：动态技能，所有机器人共用
+- /admin/skill/*：技能（内置的和安装的）和它们的权限点，所有机器人共用
 - /admin/bots/{bot_id}/personas*：人设（system prompt 和语音风格）
-- /admin/bots/{bot_id}/permissions*：技能权限
 - /admin/models*：模型，所有机器人共用
-人设和技能权限按机器人存；请求里带 all_bots=true 时改的是所有机器人共用的那份（AI 那边的 bot_id 是 "*"）。
+人设按机器人存；请求里带 all_bots=true 时改的是所有机器人共用的那份（AI 那边的 bot_id 是 "*"）。
 """
 
 import logging
@@ -37,12 +36,12 @@ def _scope(bot_id: str, request: dict) -> str:
     return ALL_BOTS if request.get("all_bots") else deps.bot(bot_id).bot_id
 
 
-# ==================== 动态技能 ====================
+# ==================== 技能 ====================
 
 @admin_ai_router.get("/skill/list")
 async def list_skills():
-    skills = await _forward(ai_admin.list_skills)
-    return ApiResponse(data={"skills": skills, "total": len(skills)})
+    """内置技能、安装的技能（都带权限点）和新内置技能的默认权限点"""
+    return ApiResponse(data=await _forward(ai_admin.list_skills))
 
 
 @admin_ai_router.post("/skill/save")
@@ -52,7 +51,7 @@ async def save_skill(request: dict):
     description = request.get("description", "").strip()
     command = request.get("command", "").strip()
     parameters = request.get("parameters") or ""
-    permissions = request.get("permissions") or None
+    permissions = request.get("permissions") or None  # 权限点列表
     if not skill_id or not name or not description or not command:
         raise ValidationException("id、name、description、command 不能为空")
     data = await _forward(ai_admin.save_skill, skill_id, name, description, command,
@@ -68,6 +67,22 @@ async def delete_skill(request: dict):
         raise ValidationException("id 不能为空")
     data = await _forward(ai_admin.delete_skill, skill_id)
     LOG.info("admin/skill/delete: id=%s", skill_id)
+    return ApiResponse(data=data)
+
+
+@admin_ai_router.post("/skill/permissions/save")
+async def save_skill_permissions(request: dict):
+    """改一个技能（内置的或安装的）的权限点"""
+    data = await _forward(ai_admin.save_skill_permissions, request.get("skill", ""), request.get("permissions"))
+    LOG.info("admin/skill/permissions/save: skill=%s", request.get("skill"))
+    return ApiResponse(data=data)
+
+
+@admin_ai_router.post("/skill/default-permissions/save")
+async def save_default_permissions(request: dict):
+    """改新内置技能第一次进库时给的权限点"""
+    data = await _forward(ai_admin.save_default_permissions, request.get("permissions"))
+    LOG.info("admin/skill/default-permissions/save: %s", request.get("permissions"))
     return ApiResponse(data=data)
 
 
@@ -93,30 +108,6 @@ async def delete_persona(bot_id: str, request: dict):
     scope = _scope(bot_id, request)
     data = await _forward(ai_admin.delete_persona, scope, request.get("chat", ""))
     LOG.info("admin/personas/delete: bot=%s chat=%s", scope, request.get("chat", ""))
-    return ApiResponse(data=data)
-
-
-# ==================== 技能权限 ====================
-
-@admin_ai_router.get("/bots/{bot_id}/permissions")
-async def list_permissions(bot_id: str):
-    """这个机器人自己的规则、所有机器人共用的规则，和可以配权限的技能"""
-    return ApiResponse(data=await _forward(ai_admin.list_permissions, deps.bot(bot_id).bot_id))
-
-
-@admin_ai_router.post("/bots/{bot_id}/permissions/save")
-async def save_permission(bot_id: str, request: dict):
-    scope = _scope(bot_id, request)
-    data = await _forward(ai_admin.save_permission, scope, request.get("skill", ""), request.get("users"))
-    LOG.info("admin/permissions/save: bot=%s skill=%s", scope, request.get("skill", ""))
-    return ApiResponse(data=data)
-
-
-@admin_ai_router.post("/bots/{bot_id}/permissions/delete")
-async def delete_permission(bot_id: str, request: dict):
-    scope = _scope(bot_id, request)
-    data = await _forward(ai_admin.delete_permission, scope, request.get("skill", ""))
-    LOG.info("admin/permissions/delete: bot=%s skill=%s", scope, request.get("skill", ""))
     return ApiResponse(data=data)
 
 

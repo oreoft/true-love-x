@@ -2,7 +2,7 @@
  * tl-admin 调 server 的 /admin/* 接口
  *
  * 按机器人的接口都在 /admin/bots/{bot_id}/ 下；技能、模型、日志、任务选项是平台级的，所有机器人共用。
- * 人设和技能权限按机器人存，带 all_bots: true 时改的是所有机器人共用的那份。
+ * 人设按机器人存，带 all_bots: true 时改的是所有机器人共用的那份。
  * 业务失败（code 不是 0）抛出带后端文案的 Error。
  */
 
@@ -67,10 +67,6 @@ export function botApi(botId) {
         personas: () => request(`${base}/personas`),
         personaSave: (persona) => post(`${base}/personas/save`, persona),
         personaDelete: (persona) => post(`${base}/personas/delete`, persona),
-
-        permissions: () => request(`${base}/permissions`),
-        permissionSave: (rule) => post(`${base}/permissions/save`, rule),
-        permissionDelete: (rule) => post(`${base}/permissions/delete`, rule),
     };
 }
 
@@ -83,6 +79,8 @@ export const platformApi = {
     skills: () => request('/admin/skill/list'),
     skillSave: (skill) => post('/admin/skill/save', skill),
     skillDelete: (id) => post('/admin/skill/delete', { id }),
+    skillPermissionsSave: (skill, permissions) => post('/admin/skill/permissions/save', { skill, permissions }),
+    defaultPermissionsSave: (permissions) => post('/admin/skill/default-permissions/save', { permissions }),
     models: () => request('/admin/models'),
     modelSave: (category, key, value) => post('/admin/models/save', { category, key, value }),
 };

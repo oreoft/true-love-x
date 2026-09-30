@@ -33,19 +33,18 @@ class AdminAiRoutesTests(ServerCase):
         ])
 
     def test_unknown_bot_is_refused_before_asking_ai(self):
-        response = self.get("/admin/bots/nobody/permissions")
+        response = self.get("/admin/bots/nobody/personas")
 
         self.assertNotEqual(response["code"], 0)
         self.assertEqual(self.forwarded, [])
 
-    def test_permission_rules_and_ai_errors_pass_through(self):
-        self.register("wxid_a")
-        self.ai_reply = {"code": 1, "message": "至少要允许一个人"}
+    def test_skill_permissions_are_platform_wide_and_ai_errors_pass_through(self):
+        self.ai_reply = {"code": 1, "message": "至少要有一个权限点"}
 
-        response = self.post("/admin/bots/wxid_a/permissions/save", skill="set_model", users=[])
+        response = self.post("/admin/skill/permissions/save", skill="set_model", permissions=[])
 
-        self.assertEqual(self.forwarded, [("/permission/save", {"bot_id": "wxid_a", "skill": "set_model", "users": []})])
-        self.assertEqual(response["message"], "至少要允许一个人")
+        self.assertEqual(self.forwarded, [("/skill/permissions/save", {"skill": "set_model", "permissions": []})])
+        self.assertEqual(response["message"], "至少要有一个权限点")
 
     def test_models_are_shared_by_every_bot(self):
         self.ai_reply = {"code": 0, "data": {"models": [{"category": "chat"}]}}

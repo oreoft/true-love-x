@@ -4,7 +4,7 @@ Admin Bot Routes - tl-admin 里按机器人管理的接口（/admin/bots/*）
 
 总览列出所有登记过的机器人；其余接口都挂在 /admin/bots/{bot_id}/ 下面，只操作这个机器人的数据：
 聊天记录、提醒、定时任务（所有平台都有），监听（只有微信机器人有，看 capabilities）。
-平台级的管理接口（日志）在 admin_platform_routes，存在 AI 那边的设置（人设、技能权限等）在 admin_ai_routes。
+平台级的管理接口（日志）在 admin_platform_routes，存在 AI 那边的设置（人设，还有平台级的技能、模型）在 admin_ai_routes。
 tl-admin 只在内网暴露，这些接口不校验 token。
 """
 
