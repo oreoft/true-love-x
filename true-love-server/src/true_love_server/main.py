@@ -11,10 +11,10 @@ import logging
 
 import uvicorn
 
-from .services import base_client
+from .services import base_client, bot_registry
 from .api import create_app
 from .core import Config
-from .core.db_engine import init_db
+from .core.db_engine import init_platform_db
 
 LOG = logging.getLogger("Main")
 config = Config()
@@ -32,12 +32,12 @@ def _run_async(coro):
 
 
 def notice_master():
-    """启动通知和信号处理；管理员是谁由 base 决定"""
-    _run_async(base_client.send_to_master("真爱粉server启动成功..."))
+    """启动通知和信号处理：从默认机器人发给它的管理员，管理员是谁由 base 决定"""
+    _run_async(base_client.send_to_master("", "真爱粉server启动成功..."))
 
     def handler(sig, frame):
         """退出前清理环境"""
-        _run_async(base_client.send_to_master("真爱粉server正在关闭..."))
+        _run_async(base_client.send_to_master("", "真爱粉server正在关闭..."))
         exit(0)
 
     signal.signal(signal.SIGINT, handler)
@@ -45,11 +45,13 @@ def notice_master():
 
 def main():
     """主函数"""
-    init_db()
+    init_platform_db()
 
-    # 启动持久化调度器（提醒和定时任务）
-    from .services.scheduler_service import start_scheduler
+    # 启动调度器，再打开登记过的机器人的库，给每个机器人挂上它的提醒和定时任务
+    from .services.scheduler_service import add_bot_store, start_scheduler
     start_scheduler()
+    bot_registry.on_new_bot(add_bot_store)
+    bot_registry.open_all()
 
     # 通知 master
     notice_master()

@@ -27,8 +27,9 @@ services:
     restart: unless-stopped
 
     # 端口映射（Docker Desktop WSL2 模式下 host 网络无效）
+    # 和 AI 部署在同一台机器上，AI 占了 8088，server 对外用 8089
     ports:
-      - "8088:8088"
+      - "8089:8088"
 
     # 卷挂载
     volumes:
@@ -39,7 +40,7 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # 本地卷 - SQLite 数据库（不放在 Windows 挂载目录上）
+      # 本地卷 - SQLite 数据库（不放在 Windows 挂载目录上）：platform.db 加每个机器人一个 <bot_id>.db
       - tl-server-dbs:/app/dbs
 
     # 启动前把配置文件软链到 /app（服务按工作目录的相对路径读取）
@@ -53,8 +54,6 @@ services:
     # 环境变量
     environment:
       - APP_ENV=prod
-      # 这台 server 服务的机器人：容器里读不到宿主机名，用宿主 Windows 的机器名（部署时 SSH 会话里自带）
-      - BOT_ID=${COMPUTERNAME}
       - TZ=Asia/Shanghai
     
     # 健康检查

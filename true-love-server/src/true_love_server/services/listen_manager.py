@@ -3,18 +3,17 @@
 Listen Manager - 监听管理器
 
 负责微信监听的管理，通过 Base 的 /execute/* 接口操作底层 SDK。
-所有连接管理逻辑集中在此模块，Base 端只提供底层能力。
+所有连接管理逻辑集中在此模块，Base 端只提供底层能力。监听是微信渠道专属功能，
+每个微信机器人一个 ListenManager，只操作自己的 base 和自己库里的监听列表。
 
 职责：
-- 在 server 数据库里管理监听列表（单一数据源）
+- 在机器人的库里管理监听列表（单一数据源）
 - 通过 Base 的 execute 接口操作 SDK
 - 提供监听状态查询、增删、刷新、重置等功能
 """
 
 import asyncio
 import logging
-from typing import Optional
-
 from . import base_client, listen_store
 
 LOG = logging.getLogger("ListenManager")
@@ -22,25 +21,16 @@ LOG = logging.getLogger("ListenManager")
 
 class ListenManager:
     """
-    监听管理器（单例）
-    
-    - 在 server 数据库里管理监听列表（单一数据源）
-    - 通过 Base 的 execute 接口操作 SDK
+    一个微信机器人的监听管理器
+
+    - 在机器人的库里管理监听列表（单一数据源）
+    - 通过这个机器人的 base 的 execute 接口操作 SDK
     """
 
-    _instance: Optional["ListenManager"] = None
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-    def __init__(self):
-        if hasattr(self, '_initialized') and self._initialized:
-            return
-
-        self._initialized = True
-        LOG.info("ListenManager initialized")
+    def __init__(self, bot_id: str):
+        self.bot_id = bot_id
+        # 机器人不是微信时这里就抛 base_client.NotSupported
+        self.base = base_client.wechat(bot_id)
 
     # ==================== 查询接口 ====================
 
@@ -57,13 +47,13 @@ class ListenManager:
         Returns:
             状态结果，包含 listeners 和 summary
         """
-        db_chats = listen_store.list_all()
+        db_chats = listen_store.list_all(self.bot_id)
 
         if not db_chats:
             return {"listeners": [], "summary": {"healthy": 0, "unhealthy": 0}}
 
         # 通过 execute/wx 调用 GetAllSubWindow
-        result = await base_client.get_wechat_client().execute_wx("GetAllSubWindow", {})
+        result = await self.base.execute_wx("GetAllSubWindow", {})
         if not result.get("success"):
             LOG.error(f"GetAllSubWindow failed: {result.get('message')}")
             # 获取失败，所有标记为 unhealthy
@@ -93,7 +83,7 @@ class ListenManager:
         # 批量获取 ChatInfo（一次请求获取所有）
         chat_info_results = {}
         if chats_with_window:
-            batch_result = await base_client.get_wechat_client().batch_chat_info(chats_with_window)
+            batch_result = await self.base.batch_chat_info(chats_with_window)
             if batch_result.get("success") and batch_result.get("data"):
                 chat_info_results = batch_result["data"].get("results", {})
             else:
@@ -148,23 +138,23 @@ class ListenManager:
             {"success": bool, "message": str}
         """
         # 检查是否已存在（仅在非 skip_store 模式下检查）
-        if not skip_store and listen_store.exists(chat_name):
+        if not skip_store and listen_store.exists(self.bot_id, chat_name):
             LOG.info(f"[{chat_name}] already in listen list")
             return {"success": True, "message": f"[{chat_name}] already exists"}
 
         # Step 1: 切换到聊天窗口
-        chat_with_result = await base_client.get_wechat_client().execute_wx("ChatWith", {"who": chat_name})
+        chat_with_result = await self.base.execute_wx("ChatWith", {"who": chat_name})
         if not chat_with_result.get("success"):
             LOG.error(f"ChatWith failed for [{chat_name}]: {chat_with_result.get('message')}")
             return {"success": False, "message": f"ChatWith failed: {chat_with_result.get('message')}"}
 
         # Step 2: 调用 Base 的 /listen/add 添加监听
-        result = await base_client.get_wechat_client().add_listen_chat(chat_name)
+        result = await self.base.add_listen_chat(chat_name)
 
         if result.get("success"):
             # SDK 添加成功，写入数据库（除非 skip_store）
             if not skip_store:
-                listen_store.add(chat_name)
+                listen_store.add(self.bot_id, chat_name)
             LOG.info(f"Added listener for [{chat_name}]")
             return {"success": True, "message": f"Added listener for [{chat_name}]"}
         else:
@@ -187,13 +177,13 @@ class ListenManager:
             {"success": bool, "message": str}
         """
         # 调用 Base 的 RemoveListenChat
-        result = await base_client.get_wechat_client().execute_wx("RemoveListenChat", {"nickname": chat_name})
+        result = await self.base.execute_wx("RemoveListenChat", {"nickname": chat_name})
 
         if not result.get("success"):
             LOG.warning(f"SDK remove failed for [{chat_name}]: {result.get('message')}")
 
         if not skip_store:
-            listen_store.remove(chat_name)
+            listen_store.remove(self.bot_id, chat_name)
 
         if result.get("success"):
             LOG.info(f"Removed listener for [{chat_name}]")
@@ -287,21 +277,21 @@ class ListenManager:
         Returns:
             {"success": bool, "message": str, "steps": list}
         """
-        if not listen_store.exists(chat_name):
+        if not listen_store.exists(self.bot_id, chat_name):
             return {"success": False, "message": f"Chat [{chat_name}] not in listen list", "steps": []}
 
         steps = []
 
         # Step 1: 切换到聊天页面
         try:
-            result = await base_client.get_wechat_client().execute_wx("SwitchToChat", {})
+            result = await self.base.execute_wx("SwitchToChat", {})
             steps.append({"step": "switch_to_chat", "success": result.get("success", False)})
         except Exception as e:
             steps.append({"step": "switch_to_chat", "success": False, "error": str(e)})
 
         # Step 2: 尝试关闭子窗口（幂等操作）
         try:
-            result = await base_client.get_wechat_client().execute_chat(chat_name, "Close", {})
+            result = await self.base.execute_chat(chat_name, "Close", {})
             steps.append({"step": "close_window", "success": result.get("success", False)})
         except Exception as e:
             steps.append({"step": "close_window", "success": False, "error": str(e)})
@@ -346,7 +336,7 @@ class ListenManager:
         Returns:
             {"success": bool, "message": str, "total": int, "recovered": list, "failed": list, "steps": list}
         """
-        db_chats = listen_store.list_all()
+        db_chats = listen_store.list_all(self.bot_id)
 
         if not db_chats:
             return {
@@ -367,13 +357,13 @@ class ListenManager:
         # Step 1: 关闭所有子窗口
         closed_count = 0
         try:
-            result = await base_client.get_wechat_client().execute_wx("GetAllSubWindow", {})
+            result = await self.base.execute_wx("GetAllSubWindow", {})
             if result.get("success"):
                 sub_windows = result.get("data", []) or []
                 for w in sub_windows:
                     who = w.get("who") if isinstance(w, dict) else None
                     if who:
-                        close_result = await base_client.get_wechat_client().execute_chat(who, "Close", {})
+                        close_result = await self.base.execute_chat(who, "Close", {})
                         if close_result.get("success"):
                             closed_count += 1
             steps.append({"step": "close_all_windows", "success": True, "closed": closed_count})
@@ -384,9 +374,9 @@ class ListenManager:
 
         # Step 2: 切换页面刷新 UI（联系人和对话来回切一下）
         try:
-            await base_client.get_wechat_client().execute_wx("SwitchToContact", {})
+            await self.base.execute_wx("SwitchToContact", {})
             await asyncio.sleep(0.3)
-            await base_client.get_wechat_client().execute_wx("SwitchToChat", {})
+            await self.base.execute_wx("SwitchToChat", {})
             await asyncio.sleep(0.3)
             steps.append({"step": "switch_pages", "success": True})
             LOG.info("Switched pages to refresh UI")
@@ -432,7 +422,6 @@ class ListenManager:
         }
 
 
-# 全局单例获取函数
-def get_listen_manager() -> ListenManager:
-    """获取 ListenManager 单例"""
-    return ListenManager()
+def get_listen_manager(bot_id: str) -> ListenManager:
+    """这个微信机器人的监听管理器。Raises: bot_registry.UnknownBot、base_client.NotSupported"""
+    return ListenManager(bot_id)

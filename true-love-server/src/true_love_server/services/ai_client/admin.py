@@ -1,27 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-AI Skill Client - 调用 AI 服务的动态技能管理 API
+AI 的管理接口，tl-admin 的请求经 server 转发过去
 
-/skill/list、/skill/save、/skill/delete 均为 POST，token 放在请求体中。
+/admin/skill/list、/admin/skill/save、/admin/skill/delete 均为 POST，token 放在请求体中。
 """
 import logging
 
 from true_love_common.hosts import ai_host
 from true_love_common.http.client import async_post_json
 
-from ..core import Config
+from ._common import token as _token
 
-LOG = logging.getLogger("AiSkillClient")
-
-
-def _token() -> str:
-    tokens = Config().HTTP_TOKEN or []
-    return tokens[0] if tokens else ""
+LOG = logging.getLogger("AiAdminClient")
 
 
 async def list_skills() -> list[dict]:
     result = await async_post_json(
-        f"{ai_host()}/skill/list",
+        f"{ai_host()}/admin/skill/list",
         {"token": _token()},
         timeout=10.0,
     )
@@ -37,7 +32,7 @@ async def save_skill(skill_id: str, name: str, description: str,
                      command: str, parameters: str | None,
                      permissions=None) -> dict:
     result = await async_post_json(
-        f"{ai_host()}/skill/save",
+        f"{ai_host()}/admin/skill/save",
         {
             "token": _token(),
             "id": skill_id,
@@ -60,7 +55,7 @@ async def save_skill(skill_id: str, name: str, description: str,
 
 async def delete_skill(skill_id: str) -> dict:
     result = await async_post_json(
-        f"{ai_host()}/skill/delete",
+        f"{ai_host()}/admin/skill/delete",
         {"token": _token(), "id": skill_id},
         timeout=10.0,
     )

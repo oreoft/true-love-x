@@ -2,7 +2,13 @@
 """
 FastAPI Application - FastAPI 应用
 
-创建和配置 FastAPI 应用实例。
+创建和配置 FastAPI 应用实例。路由按调用方分文件：
+
+- open_routes：外部调用方（/send-msg、/ping、/health）
+- base_routes：各平台的 base（/base/*）
+- ai_routes：AI 的业务回调（/action/*）
+- admin_bot_routes、admin_platform_routes：tl-admin（/admin/*），页面本身是 /admin
+- /media：server 自己的图片（摸鱼图、早报图），base 下载后发送
 """
 
 import asyncio
@@ -16,10 +22,14 @@ from fastapi.responses import FileResponse
 from true_love_common.integrations.fastapi import HttpLoggingMiddleware
 from true_love_common.media import media_router
 
-from .routes import router
-from .action_routes import action_router
+from .admin_bot_routes import admin_bot_router
+from .admin_platform_routes import admin_platform_router
+from .ai_routes import ai_router
+from .base_routes import base_router
 from .exception_handlers import setup_exception_handlers
+from .open_routes import open_router
 from ..jobs.job_process import MEDIA_DIRS
+from ..services import bot_registry
 from ..services.listen_manager import get_listen_manager
 
 LOG = logging.getLogger("FastAPIApp")
@@ -30,13 +40,16 @@ STARTUP_REFRESH_DELAY = 60
 
 
 async def _refresh_listen_after_startup():
-    """兜底：base 比 server 先起来、等不到 server 放弃监听时，由 server 把监听补上"""
+    """兜底：base 比 server 先起来、等不到 server 放弃监听时，由 server 把每个微信机器人的监听补上"""
     await asyncio.sleep(STARTUP_REFRESH_DELAY)
-    try:
-        result = await get_listen_manager().refresh_listen()
-        LOG.info("启动后补监听完成: 共 %s 个，失败 %s 个", result["total"], result["fail_count"])
-    except Exception:
-        LOG.exception("启动后补监听失败")
+    for bot in bot_registry.list_all():
+        if not bot.can("listen"):
+            continue
+        try:
+            result = await get_listen_manager(bot.bot_id).refresh_listen()
+            LOG.info("启动后补监听完成: bot_id=%s 共 %s 个，失败 %s 个", bot.bot_id, result["total"], result["fail_count"])
+        except Exception:
+            LOG.exception("启动后补监听失败: bot_id=%s", bot.bot_id)
 
 
 @asynccontextmanager
@@ -53,7 +66,7 @@ def create_app() -> FastAPI:
     """创建 FastAPI 应用实例"""
     app = FastAPI(
         title="True Love Server",
-        description="真爱粉服务端 - 微信机器人后端服务",
+        description="真爱粉服务端 - 多个机器人共用的中转层，连接各平台的 base 和 AI",
         version="0.2.0",
         lifespan=lifespan,
     )
@@ -76,11 +89,14 @@ def create_app() -> FastAPI:
     setup_exception_handlers(app)
 
     # 注册路由
-    app.include_router(router)
-    app.include_router(action_router)
+    app.include_router(open_router)
+    app.include_router(base_router)
+    app.include_router(ai_router)
+    app.include_router(admin_bot_router)
+    app.include_router(admin_platform_router)
     app.include_router(media_router(MEDIA_DIRS))
 
-    # /admin 路径返回管理页面
+    # /admin 路径返回 tl-admin 页面
     @app.get("/admin", include_in_schema=False)
     async def admin_page():
         return FileResponse("static/index.html")

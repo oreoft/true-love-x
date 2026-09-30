@@ -2,7 +2,7 @@
 """
 Job Process - 定时任务处理
 
-包含各种定时任务的具体实现。
+包含各种定时任务的具体实现。要往外发消息的任务第一个参数是 bot_id（从哪个机器人发），第二个是接收者。
 """
 
 import asyncio
@@ -18,35 +18,20 @@ from bs4 import BeautifulSoup
 from PIL import Image
 from pathlib import Path
 
-from true_love_common.hosts import ai_host
+from true_love_common.hosts import server_host
 from true_love_common.http.client import get, post
+from true_love_common.media import to_url
 
 from ..services import base_client
+from ..services.ai_client.business import fetch_data
 from ..core import Config
 
 _config = Config()
 alapi_config = _config.ALAPI
 LOG = logging.getLogger("JobProcess")
 
-# 摸鱼图、早报图的目录，通过 /media 开放给 base 下载后发送
+# 摸鱼图、早报图的目录，通过 /media 开放给 base 下载后发送；所有机器人共用，一天只下载一次
 MEDIA_DIRS = [Path("moyu-jpg"), Path("zaobao-jpg")]
-
-
-def _fetch_ai_data(path: str, params: dict = None) -> str:
-    """
-    从 AI 的 /data/* 接口获取数据文本。
-    失败时返回空字符串，不抛异常（Job 不依赖此成功）。
-    """
-    try:
-        token = _config.HTTP_TOKEN[0] if _config.HTTP_TOKEN else ""
-        url = f"{ai_host()}{path}"
-        query_params = {"token": token, **(params or {})}
-        resp = get(url, params=query_params, timeout=15)
-        resp.raise_for_status()
-        return (resp.data or {}).get("data", {}).get("text", "")
-    except Exception as e:
-        LOG.error("_fetch_ai_data %s 失败: %s", path, e)
-        return ""
 
 # 默认网络请求超时时间（秒）
 DEFAULT_TIMEOUT = 60
@@ -68,7 +53,12 @@ def log_function_execution(func):
     return wrapper
 
 
-def send_daily_notice(room_id, content='早上好☀️家人萌~'):
+def _send_img(bot_id: str, path: str, receiver: str) -> tuple[bool, str]:
+    """发 server 自己目录里的图片（path 相对工作目录），base 从 server 的 /media 下载"""
+    return asyncio.run(base_client.send_file(bot_id, to_url(path, server_host()), receiver))
+
+
+def send_daily_notice(bot_id, room_id, content='早上好☀️家人萌~'):
     try:
         ensure_today_images()
     except Exception as e:
@@ -79,35 +69,35 @@ def send_daily_notice(room_id, content='早上好☀️家人萌~'):
     moyu_file_path = f'moyu-jpg/{current_date}.jpg'
     zao_bao_file_path = f'zaobao-jpg/{current_date}.jpg'
 
-    r_resp = _fetch_ai_data("/data/currency", {"currency": "日元"})
+    r_resp = fetch_data("/data/currency", {"currency": "日元"})
     if r_resp and "失败" not in r_resp:
         content += "\n\n今日日元汇率情况：\n" + r_resp
 
-    r_resp2 = _fetch_ai_data("/data/currency", {"currency": "美元"})
+    r_resp2 = fetch_data("/data/currency", {"currency": "美元"})
     if r_resp2 and "失败" not in r_resp2:
         content += "\n\n今日美元汇率情况：\n" + r_resp2
 
-    r_resp3 = _fetch_ai_data("/data/gold")
+    r_resp3 = fetch_data("/data/gold")
     if r_resp3 and "失败" not in r_resp3:
         content += "\n\n今日黄金汇率情况：\n" + r_resp3
 
-    asyncio.run(base_client.send_text(room_id, '', content))
+    asyncio.run(base_client.send_text(bot_id, room_id, '', content))
     if check_image_openable(moyu_file_path):
         time.sleep(2)
-        moyu_res = asyncio.run(base_client.get_wechat_client().send_img(moyu_file_path, room_id))
+        moyu_res = _send_img(bot_id, moyu_file_path, room_id)
         LOG.info(f"send_image: {moyu_file_path}, result: {moyu_res}")
     if check_image_openable(zao_bao_file_path):
         time.sleep(2)
-        zao_bao_res = asyncio.run(base_client.get_wechat_client().send_img(zao_bao_file_path, room_id))
-        LOG.info(f"send_image: {moyu_file_path}, result: {zao_bao_res}")
+        zao_bao_res = _send_img(bot_id, zao_bao_file_path, room_id)
+        LOG.info(f"send_image: {zao_bao_file_path}, result: {zao_bao_res}")
 
 
-def notice_moyu_schedule(room_id):
-    send_daily_notice(room_id)
+def notice_moyu_schedule(bot_id, room_id):
+    send_daily_notice(bot_id, room_id)
 
 
-def notice_usa_moyu_schedule(room_id):
-    send_daily_notice(room_id, "早上好☀️友友们~, \n现在国内太阳已经落下, 多赢阿美莉卡一天")
+def notice_usa_moyu_schedule(bot_id, room_id):
+    send_daily_notice(bot_id, room_id, "早上好☀️友友们~, \n现在国内太阳已经落下, 多赢阿美莉卡一天")
 
 
 _download_lock = threading.Lock()

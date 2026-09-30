@@ -1,17 +1,13 @@
 # True Love Server Configuration Example
 # ============================================
 #
-# This file is shared by every machine that runs the server: it holds only the
-# secrets and addresses that are the same everywhere.
+# One server serves every bot (every WeChat account, and later other platforms).
+# This file holds only secrets.
 #
-# Service addresses are not configured here: base, server and AI addresses live in
-# true_love_common/hosts.py, keyed by bot (the machine name of its base).
+# Service addresses are not configured here: the server and AI addresses live in
+# true_love_common/hosts.py, and every base reports its own callback address on each call
+# (kept in the bots table of dbs/platform.db). Each bot's data is in dbs/<bot_id>.db.
 # Who the master is, is known only to base (see true-love-base/config.yaml.example).
-
-# Lark base address (飞书 base 服务地址)
-base_server:
-  hosts:
-    lark: ""
 
 # Tokens accepted by this server; the first one is also used when calling AI
 http_token: ["your_secret_token"]

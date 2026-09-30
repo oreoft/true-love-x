@@ -2,8 +2,9 @@
 """
 Task Service - 定时任务
 
-后台"定时任务"页里的第二种类型：把写好的任务（如国内摸鱼）推给一批接收者，
-可以只执行一次，也可以每天定时执行。和提醒共用同一个 APScheduler，存在这台 server 的数据库里。
+后台"定时任务"页里的第二种类型：把写好的任务（如国内摸鱼）从一个机器人推给一批接收者，
+可以只执行一次，也可以每天定时执行。和提醒共用同一个 APScheduler，存在所属机器人的库里。
+job_process 里要往外发消息的任务方法第一个参数是 bot_id，之后的参数（有的话）是接收者。
 """
 import inspect
 import logging
@@ -17,7 +18,7 @@ import pytz
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.date import DateTrigger
 
-from .scheduler_service import scheduler
+from .scheduler_service import MEMORY, get_job, get_jobs, scheduler
 
 LOG = logging.getLogger("TaskService")
 
@@ -45,23 +46,29 @@ def _find(job_name: str):
     return func
 
 
+def _takes_bot(func) -> bool:
+    """第一个参数叫 bot_id 的方法，执行时传入任务所属的机器人"""
+    return next(iter(inspect.signature(func).parameters), None) == "bot_id"
+
+
 def _takes_receiver(func) -> bool:
-    """带参数的方法按接收者逐个执行，不带参数的只执行一次"""
-    return len(inspect.signature(func).parameters) > 0
+    """除了 bot_id 还有参数的方法按接收者逐个执行，没有的只执行一次"""
+    return len(inspect.signature(func).parameters) > (1 if _takes_bot(func) else 0)
 
 
-def _run_task(task_id: str, job_name: str, receivers: list[str], schedule: dict) -> None:
+def _run_task(task_id: str, job_name: str, receivers: list[str], schedule: dict, bot_id: str) -> None:
     """APScheduler 触发函数（模块级，SQLAlchemy jobstore 按名字引用）"""
-    LOG.info("定时任务触发: task_id=%s job=%s receivers=%s", task_id, job_name, receivers)
+    LOG.info("定时任务触发: bot_id=%s task_id=%s job=%s receivers=%s", bot_id, task_id, job_name, receivers)
     func = _find(job_name)
+    args = [bot_id] if _takes_bot(func) else []
     if not _takes_receiver(func):
-        func()
+        func(*args)
         return
     for index, receiver in enumerate(receivers):
         if index:
             time.sleep(30)
         try:
-            func(receiver)
+            func(*args, receiver)
         except Exception as e:
             LOG.exception("任务 %s 推送到 %s 失败: %s", job_name, receiver, e)
 
@@ -106,15 +113,17 @@ def _clean(job_name: str, receivers: Any, schedule: Any) -> tuple[str, list[str]
     raise ValueError("触发方式只能是单次或每天")
 
 
-def _schedule_job(task_id: str, job_name: str, receivers: Any, schedule: Any) -> dict:
+def _schedule_job(bot_id: str, task_id: str, job_name: str, receivers: Any, schedule: Any) -> dict:
     job_name, receivers, schedule, trigger = _clean(job_name, receivers, schedule)
     job = scheduler.add_job(
         _run_task,
         trigger,
         id=task_id,
+        jobstore=bot_id,
         replace_existing=True,
         max_instances=1,
-        kwargs={"task_id": task_id, "job_name": job_name, "receivers": receivers, "schedule": schedule},
+        kwargs={"task_id": task_id, "job_name": job_name, "receivers": receivers, "schedule": schedule,
+                "bot_id": bot_id},
     )
     return _describe(job)
 
@@ -130,8 +139,8 @@ def _describe(job) -> dict:
     }
 
 
-def _get(task_id: str):
-    job = scheduler.get_job(task_id) if task_id.startswith(ID_PREFIX) else None
+def _get(bot_id: str, task_id: str):
+    job = get_job(bot_id, task_id) if task_id.startswith(ID_PREFIX) else None
     if not job:
         raise ValueError(f"未找到定时任务: {task_id}")
     return job
@@ -144,56 +153,56 @@ def job_names() -> list[str]:
             if not name.startswith("_") and inspect.isfunction(func) and func.__module__ == module.__name__]
 
 
-def list_tasks() -> list[dict]:
-    """全部定时任务，按下次执行时间升序"""
-    result = [_describe(job) for job in scheduler.get_jobs() if job.id.startswith(ID_PREFIX)]
+def list_tasks(bot_id: str) -> list[dict]:
+    """这个机器人的全部定时任务，按下次执行时间升序"""
+    result = [_describe(job) for job in get_jobs(bot_id) if job.id.startswith(ID_PREFIX)]
     result.sort(key=lambda task: task["next_run_time"] or "9999")
     return result
 
 
-def add_task(job_name: str, receivers: Any, schedule: Any) -> dict:
+def add_task(bot_id: str, job_name: str, receivers: Any, schedule: Any) -> dict:
     task_id = f"{ID_PREFIX}{job_name}_{uuid.uuid4().hex[:8]}"
-    task = _schedule_job(task_id, job_name, receivers, schedule)
+    task = _schedule_job(bot_id, task_id, job_name, receivers, schedule)
     LOG.info("task/add: %s", task)
     return task
 
 
-def update_task(task_id: str, job_name: str, receivers: Any, schedule: Any) -> dict:
-    _get(task_id)
-    task = _schedule_job(task_id, job_name, receivers, schedule)
+def update_task(bot_id: str, task_id: str, job_name: str, receivers: Any, schedule: Any) -> dict:
+    _get(bot_id, task_id)
+    task = _schedule_job(bot_id, task_id, job_name, receivers, schedule)
     LOG.info("task/update: %s", task)
     return task
 
 
-def delete_task(task_id: str) -> dict:
-    _get(task_id)
-    scheduler.remove_job(task_id)
+def delete_task(bot_id: str, task_id: str) -> dict:
+    _get(bot_id, task_id)
+    scheduler.remove_job(task_id, jobstore=bot_id)
     LOG.info("task/delete: task_id=%s", task_id)
     return {"task_id": task_id}
 
 
-def run_now(task_id: str) -> dict:
+def run_now(bot_id: str, task_id: str) -> dict:
     """立即执行一次，不影响之后的定时"""
-    kwargs = dict(_get(task_id).kwargs or {})
+    kwargs = {**(_get(bot_id, task_id).kwargs or {}), "bot_id": bot_id}
     _start(kwargs)
     LOG.info("task/run: task_id=%s", task_id)
     return {"task_id": task_id}
 
 
-def run_by_job_name(job_name: str) -> list[str]:
-    """立即执行这个任务名下的所有定时任务（AI 手动触发用），返回执行了的 task_id"""
+def run_by_job_name(bot_id: str, job_name: str) -> list[str]:
+    """立即执行这个机器人在这个任务名下的所有定时任务（AI 手动触发用），返回执行了的 task_id"""
     _find(job_name)
     started = []
-    for job in scheduler.get_jobs():
-        kwargs = dict(job.kwargs or {})
+    for job in get_jobs(bot_id):
+        kwargs = {**(job.kwargs or {}), "bot_id": bot_id}
         if job.id.startswith(ID_PREFIX) and kwargs.get("job_name") == job_name:
             _start(kwargs)
             started.append(job.id)
-    LOG.info("task/run_by_job_name: job=%s tasks=%s", job_name, started)
+    LOG.info("task/run_by_job_name: bot_id=%s job=%s tasks=%s", bot_id, job_name, started)
     return started
 
 
 def _start(kwargs: dict) -> None:
     """在调度器的线程池里执行，推送要几十秒，不阻塞接口"""
-    scheduler.add_job(_run_task, kwargs=kwargs, jobstore="memory")
+    scheduler.add_job(_run_task, kwargs=kwargs, jobstore=MEMORY)
 
