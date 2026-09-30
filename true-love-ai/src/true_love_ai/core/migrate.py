@@ -8,52 +8,65 @@ AI DB 当前 Migration
 
 import json
 import logging
-import re
 import sqlite3
 from datetime import datetime
-from pathlib import Path
-
-import yaml
 
 LOG = logging.getLogger("migrate")
 
-VERSION = "003"
-DESCRIPTION = "personas / skill_permissions: import from the old config file"
-
-# 旧代码里写死的语音风格，导入成所有机器人共用的默认
-_OLD_VOICE_STYLE = "请用软萌可爱、俏皮活泼、带点小傲娇的16岁萝莉少女音色朗读，语调轻快、尾音略微上扬："
-# 旧 prompt 里写死的名字换成 {name}，按机器人的昵称替换
-_NAME_IN_PROMPT = re.compile(r"(你的名字叫做?)[^，,。！!\s]+")
+VERSION = "004"
+DESCRIPTION = "skill_access: one platform-wide permission list per skill, points written as platform:bot:group:person"
 
 
-def _old_config() -> dict:
-    """旧配置文件里的 llm、skill_permissions 段；没有配置文件（如测试）时为空"""
-    from true_love_ai.core.config import _config_path
-    path = Path(_config_path())
-    if not path.exists():
-        return {}
-    return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+def _tables(conn: sqlite3.Connection) -> set[str]:
+    return {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
 
 
-def migrate(conn: sqlite3.Connection, old: dict) -> None:
-    """表由 create_all 建好；这里把旧配置里的默认 prompt 和技能权限导进来，都挂在所有机器人（"*"）下面"""
+def _cols(conn: sqlite3.Connection, table: str) -> set[str]:
+    return {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+
+
+def convert(entry: str, bot_id: str) -> str:
+    """旧权限 "平台:人" / "平台:*" / "*"（外加它属于哪个号，"*" 是所有号）→ 新的四段 "平台:号:群:人" """
+    entry = entry.strip()
+    if entry == "*":
+        return f"*:{bot_id}:*:*" if bot_id != "*" else "*:*:*:*"
+    platform, _, user = entry.partition(":")
+    return f"{platform}:{bot_id}:*:{user or '*'}"
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """skill_access、ai_settings 由 create_all 建好；这里把旧的按号规则和动态技能自带的权限搬进来"""
     now = datetime.now().isoformat()
-    llm = old.get("llm") or {}
-    prompt = _NAME_IN_PROMPT.sub(r"\1{name}", (llm.get("system_prompt") or "").strip(), count=1)
-    conn.execute(
-        "INSERT OR IGNORE INTO personas (bot_id, chat, prompt, voice_style, updated_at) VALUES ('*', '', ?, ?, ?)",
-        (prompt, _OLD_VOICE_STYLE, now),
-    )
-    for skill, users in (old.get("skill_permissions") or {}).items():
-        conn.execute(
-            "INSERT OR IGNORE INTO skill_permissions (bot_id, skill, users, updated_at) VALUES ('*', ?, ?, ?)",
-            (skill, json.dumps(list(users), ensure_ascii=False), now),
-        )
-    # 按群或人指定的 prompt 用的是以前的 wxid，现在消息里是昵称和群名，对不上，不导入
-    skipped = llm.get("user_prompt_map") or {}
-    if skipped:
-        LOG.info("Migration %s: %d 条按群或人指定的 prompt 没导入（旧 id 对不上），需要时在 tl-admin 里按群名重新指定",
-                 VERSION, len(skipped))
+    points: dict[str, list[str]] = {}
+    kinds: dict[str, str] = {}
+
+    if "skill_permissions" in _tables(conn):
+        for bot_id, skill, users in conn.execute("SELECT bot_id, skill, users FROM skill_permissions"):
+            for entry in json.loads(users or "[]"):
+                point = convert(entry, bot_id)
+                if point not in points.setdefault(skill, []):
+                    points[skill].append(point)
+            kinds[skill] = "builtin"
+
+    # 动态技能自带的权限以前优先于规则；没带的以前是所有人能用
+    if "dynamic_skills" in _tables(conn) and "permissions" in _cols(conn, "dynamic_skills"):
+        for skill_id, perms in conn.execute("SELECT id, permissions FROM dynamic_skills"):
+            own = [convert(e, "*") for e in json.loads(perms)] if perms else None
+            points[skill_id] = own or points.get(skill_id) or ["*:*:*:*"]
+            kinds[skill_id] = "installed"
+
+    for skill, pts in points.items():
+        conn.execute("INSERT OR IGNORE INTO skill_access (skill, kind, points, updated_at) VALUES (?, ?, ?, ?)",
+                     (skill, kinds[skill], json.dumps(pts, ensure_ascii=False), now))
+
+    # 新内置技能默认给管理员：沿用"保存技能"这个管理类技能现在的权限，没有就所有人
+    default = points.get("skill_save") or ["*:*:*:*"]
+    conn.execute("INSERT OR IGNORE INTO ai_settings (key, value, updated_at) VALUES ('new_builtin_skill_points', ?, ?)",
+                 (json.dumps(default, ensure_ascii=False), now))
+
+    if "skill_permissions" in _tables(conn):
+        conn.execute("DROP TABLE skill_permissions")
+    LOG.info("Migration %s: 搬了 %d 个技能的权限，新内置技能默认 %s", VERSION, len(points), default)
 
 
 def run(db_path: str) -> None:
@@ -66,7 +79,7 @@ def run(db_path: str) -> None:
             return
         LOG.info("Migration %s: applying — %s", VERSION, DESCRIPTION)
         try:
-            migrate(conn, _old_config())
+            migrate(conn)
             conn.execute(
                 "INSERT INTO schema_migrations (version, description, applied_at) VALUES (?, ?, ?)",
                 (VERSION, DESCRIPTION, datetime.now().isoformat()),

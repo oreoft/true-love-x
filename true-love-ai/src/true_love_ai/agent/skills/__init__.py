@@ -2,8 +2,11 @@
 """
 AI Agent Skills
 
-所有 skill 在这里统一注册，import 本模块时自动完成注册。
+这个文件夹里的每个模块在 import 时用 @register_skill 注册自己。启动时自动扫描加载，
+新加技能只要放一个文件进来；下划线开头的是共用的小工具，不扫。
 """
+import importlib
+import pkgutil
 
 _loaded = False
 
@@ -15,25 +18,6 @@ def ensure_skills_loaded():
         return
     _loaded = True
 
-    # 逐个导入 skill 模块触发注册
-    from . import (  # noqa: F401
-        currency_skill,
-        gold_skill,
-        reminder_skill,
-        listen_skill,
-        profile_skill,
-        analyze_speech_skill,
-        analyze_group_skill,
-        image_skill,
-        video_skill,
-        audio_skill,
-        search_skill,
-        config_skill,
-        wechat_qr_skill,
-        job_skill,
-        model_skill,
-        file_skill,
-        pajohns_skill,
-        dynamic_skill_manage,
-        group_context_skill,
-    )
+    for module in pkgutil.iter_modules(__path__):
+        if not module.name.startswith("_"):
+            importlib.import_module(f"{__name__}.{module.name}")

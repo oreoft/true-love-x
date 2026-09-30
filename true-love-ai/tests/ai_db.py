@@ -9,8 +9,8 @@ from sqlalchemy.pool import StaticPool
 
 from true_love_ai.core import model_registry
 from true_love_ai.core.db_engine import Base
-from true_love_ai.memory import persona_service, skill_permission_service
-from true_love_ai.models import model_setting, persona, skill_permission  # noqa: F401  registers the tables
+from true_love_ai.memory import dynamic_skill_service, persona_service, skill_access_service
+from true_love_ai.models import dynamic_skill, model_setting, persona, skill_access  # noqa: F401  registers the tables
 
 
 def memory_db(test) -> sessionmaker:
@@ -19,10 +19,10 @@ def memory_db(test) -> sessionmaker:
     Base.metadata.create_all(engine)
     factory = sessionmaker(bind=engine)
     stack = ExitStack()
-    for module in (persona_service, skill_permission_service, model_registry):
+    for module in (persona_service, skill_access_service, dynamic_skill_service, model_registry):
         stack.enter_context(patch.object(module, "SessionLocal", factory))
-    skill_permission_service._clear_cache()
+    skill_access_service._clear_cache()
     test.addCleanup(stack.close)
-    test.addCleanup(skill_permission_service._clear_cache)
+    test.addCleanup(skill_access_service._clear_cache)
     test.addCleanup(engine.dispose)
     return factory

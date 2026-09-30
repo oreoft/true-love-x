@@ -51,8 +51,12 @@ def main():
     init_llm()
 
     # 加载所有 AI 本地 skills
+    from true_love_ai.agent import skill_registry
     from true_love_ai.agent.skills import ensure_skills_loaded
+    from true_love_ai.memory import skill_access_service
     ensure_skills_loaded()
+    # 新加的内置技能第一次进权限表，拿后台设的默认权限点
+    skill_access_service.sync_builtin(skill_registry.names())
     LOG.info("AI 本地 skills 加载完成")
 
     # 设置信号处理

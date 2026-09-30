@@ -1,12 +1,9 @@
-"""Personas, skill permissions and models live in the AI database and are chosen per bot."""
+"""Personas and models live in the AI database; personas are chosen per bot."""
 
-import json
-import sqlite3
 import unittest
 
-from true_love_ai.agent.skills import permission
-from true_love_ai.core import migrate, model_registry
-from true_love_ai.memory import persona_service, skill_permission_service
+from true_love_ai.core import model_registry
+from true_love_ai.memory import persona_service
 from ai_db import memory_db
 
 
@@ -50,42 +47,6 @@ class PersonaTests(unittest.TestCase):
         self.assertFalse(persona_service.delete_persona("bot_a", "group1"))
 
 
-class PermissionTests(unittest.TestCase):
-    def setUp(self):
-        memory_db(self)
-
-    def allowed(self, bot_id, sender_id, skill="set_model"):
-        return permission.check_permission(skill, {"platform": "wechat", "sender_id": sender_id, "bot_id": bot_id})
-
-    def test_a_bot_rule_overrides_the_shared_rule(self):
-        skill_permission_service.save_rule("*", "set_model", ["wechat:admin"])
-        skill_permission_service.save_rule("bot_b", "set_model", ["wechat:owner_b"])
-
-        self.assertTrue(self.allowed("bot_a", "admin"))
-        self.assertFalse(self.allowed("bot_a", "owner_b"))
-        self.assertTrue(self.allowed("bot_b", "owner_b"))
-        self.assertFalse(self.allowed("bot_b", "admin"))
-
-    def test_skills_without_rules_are_open_and_code_permissions_come_first(self):
-        skill_permission_service.save_rule("*", "set_model", ["wechat:admin"])
-
-        self.assertTrue(self.allowed("bot_a", "anyone", skill="gold_price"))
-        ctx = {"platform": "wechat", "sender_id": "admin", "bot_id": "bot_a"}
-        self.assertFalse(permission.check_permission("set_model", ctx, code_permissions=["wechat:nobody"]))
-
-    def test_changes_take_effect_without_a_restart(self):
-        self.assertTrue(self.allowed("bot_a", "anyone"))
-        skill_permission_service.save_rule("bot_a", "set_model", '["wechat:admin"]')
-        self.assertFalse(self.allowed("bot_a", "anyone"))
-        skill_permission_service.delete_rule("bot_a", "set_model")
-        self.assertTrue(self.allowed("bot_a", "anyone"))
-
-    def test_rules_must_name_someone(self):
-        for users in ([], ["  "], "not json", [1]):
-            with self.assertRaises(ValueError):
-                skill_permission_service.save_rule("bot_a", "set_model", users)
-
-
 class ModelTests(unittest.TestCase):
     def setUp(self):
         memory_db(self)
@@ -110,33 +71,6 @@ class ModelTests(unittest.TestCase):
             self.registry.set("music", "default", "x")
         with self.assertRaises(ValueError):
             self.registry.set("chat", "backup", "x")
-
-
-class MigrationTests(unittest.TestCase):
-    def setUp(self):
-        self.conn = sqlite3.connect(":memory:")
-        self.conn.execute("CREATE TABLE personas (bot_id, chat, prompt, voice_style, updated_at, PRIMARY KEY (bot_id, chat))")
-        self.conn.execute("CREATE TABLE skill_permissions (bot_id, skill, users, updated_at, PRIMARY KEY (bot_id, skill))")
-        self.addCleanup(self.conn.close)
-
-    def test_old_config_becomes_the_shared_defaults(self):
-        old = {
-            "llm": {"system_prompt": "你是智能聊天机器人,你的名字叫小明，喜欢唱歌", "user_prompt_map": {"wechat:old_id": "x"}},
-            "skill_permissions": {"set_model": ["wechat:admin"]},
-        }
-        with self.assertLogs("migrate", level="INFO"):
-            migrate.migrate(self.conn, old)
-
-        prompt, voice = self.conn.execute("SELECT prompt, voice_style FROM personas WHERE bot_id='*' AND chat=''").fetchone()
-        self.assertEqual(prompt, "你是智能聊天机器人,你的名字叫{name}，喜欢唱歌")
-        self.assertTrue(voice)
-        users = self.conn.execute("SELECT users FROM skill_permissions WHERE bot_id='*' AND skill='set_model'").fetchone()[0]
-        self.assertEqual(json.loads(users), ["wechat:admin"])
-
-    def test_without_an_old_config_only_the_voice_style_is_seeded(self):
-        migrate.migrate(self.conn, {})
-        self.assertEqual(self.conn.execute("SELECT prompt FROM personas").fetchall(), [("",)])
-        self.assertEqual(self.conn.execute("SELECT COUNT(*) FROM skill_permissions").fetchone()[0], 0)
 
 
 if __name__ == "__main__":

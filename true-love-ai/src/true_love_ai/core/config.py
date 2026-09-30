@@ -20,7 +20,7 @@ class Config(BaseSettings):
     """
     主配置类
     支持从 config.yaml 和环境变量加载。配置文件只放密钥、地址和部署参数；
-    人设、技能权限、模型存在 AI 库里，在 tl-admin 管理。旧配置里的 llm、skill_permissions 段会被忽略。
+    人设、技能权限、模型存在 AI 库里，在 tl-admin 管理。
     """
     model_config = SettingsConfigDict(extra="ignore")
 

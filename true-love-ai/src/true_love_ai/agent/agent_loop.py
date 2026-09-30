@@ -79,11 +79,13 @@ class AgentLoop:
                                                      chat=_session_base, bot_name=msg.bot_name)
         session.add_message("user", user_content)
 
-        # 获取当前用户有权限使用的 tools
-        tools = skill_registry.get_all_tool_schemas(platform=platform, sender_id=sender_id, bot_id=bot_id)
+        # 获取当前用户在这里有权限使用的 tools（权限点按平台、号、群、人匹配）
+        access = {"platform": platform, "bot_id": bot_id, "sender_id": sender_id, "is_group": is_group,
+                  "chat": chat_id if is_group else ""}
+        tools = skill_registry.get_all_tool_schemas(access)
 
         # 开始 Agent Loop
-        messages = session.get_messages_for_llm(platform=platform, sender_id=sender_id, bot_id=bot_id)
+        messages = session.get_messages_for_llm(access)
         reply = None
 
         for iteration in range(MAX_TOOL_ITERATIONS):
@@ -236,6 +238,8 @@ class AgentLoop:
             "at_user": at_user,
             "platform": platform,
             "bot_id": bot_id,
+            # 权限点按群匹配用；私聊为空
+            "chat": receiver if is_group else "",
         }
 
         try:

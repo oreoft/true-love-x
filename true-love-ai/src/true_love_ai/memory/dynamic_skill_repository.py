@@ -17,8 +17,7 @@ class DynamicSkillRepository:
         self.session = session
 
     def save(self, id: str, name: str, description: str, command: str,
-             parameters: str | None, creator: str | None,
-             permissions: str | None = None) -> bool:
+             parameters: str | None, creator: str | None) -> bool:
         try:
             existing = self.session.get(DynamicSkill, id)
             if existing:
@@ -26,7 +25,6 @@ class DynamicSkillRepository:
                 existing.description = description
                 existing.command = command
                 existing.parameters = parameters
-                existing.permissions = permissions
                 existing.creator = creator
             else:
                 self.session.add(DynamicSkill(
@@ -35,7 +33,6 @@ class DynamicSkillRepository:
                     description=description,
                     command=command,
                     parameters=parameters,
-                    permissions=permissions,
                     creator=creator,
                 ))
             self.session.commit()

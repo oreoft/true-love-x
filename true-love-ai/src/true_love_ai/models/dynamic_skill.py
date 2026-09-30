@@ -17,7 +17,6 @@ class DynamicSkill(Base):
     description = Column(Text, nullable=False, comment="触发描述，注入进 LLM 上下文")
     command = Column(Text, nullable=False, comment="shell 命令模板，支持 {param} 占位符")
     parameters = Column(Text, nullable=True, comment="参数定义 JSON：{name: {default, desc}}")
-    permissions = Column(Text, nullable=True, comment="权限 JSON 数组，如 [\"wechat:*\", \"lark:user1\"]，为空时按 config/默认规则")
     creator = Column(String(128), nullable=True, comment="创建者 wxid")
     created_at = Column(DateTime, nullable=False, default=datetime.now)
     usage_count = Column(Integer, nullable=False, default=0)

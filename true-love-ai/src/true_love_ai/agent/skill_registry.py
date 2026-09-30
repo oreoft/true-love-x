@@ -11,7 +11,7 @@ from typing import Callable, Awaitable
 
 LOG = logging.getLogger("SkillRegistry")
 
-# {name: {"schema": {...}, "handler": async fn, "permissions": dict|None}}
+# {name: {"schema": {...}, "handler": async fn}}；谁能用存在库里（skill_access_service），代码里不写
 _skills: dict[str, dict] = {}
 
 
@@ -27,8 +27,7 @@ def register_skill(schema: dict):
             "description": "...",
             "parameters": {...}
         },
-        "permissions": ["*"]   # 可选，代码级权限（规则2）
-                               # ["*"] / ["wechat:*"] / ["wechat:user1", "lark:*"]
+        "notify": [...]   # 可选，执行前先发给用户的提示
     }
 
     被装饰的函数签名：async def fn(params: dict, ctx: dict) -> str
@@ -38,26 +37,23 @@ def register_skill(schema: dict):
         _skills[name] = {
             "schema": schema,
             "handler": fn,
-            "permissions": schema.get("permissions"),
         }
         LOG.debug("Registered skill: %s", name)
         return fn
     return decorator
 
 
-def get_all_tool_schemas(platform: str = "", sender_id: str = "", bot_id: str = "") -> list[dict]:
-    """获取当前用户在这个机器人上有权限使用的 skill tool schema 列表（供 LLM tools 参数使用）"""
+def get_all_tool_schemas(ctx: dict) -> list[dict]:
+    """当前这个人在这里能用的 skill tool schema 列表（供 LLM tools 参数使用）；ctx 的字段见 permission"""
     import copy
     from true_love_ai.agent.skills.permission import check_permission
 
     schemas = []
-    ctx = {"platform": platform, "sender_id": sender_id, "bot_id": bot_id}
     for name, s in _skills.items():
-        if not check_permission(name, ctx, s["permissions"]):
+        if not check_permission(name, ctx):
             continue
         schema = copy.deepcopy(s["schema"])
         schema.pop("notify", None)
-        schema.pop("permissions", None)  # 内部字段，不传给 LLM
         params = schema.get("function", {}).get("parameters", {})
         if isinstance(params.get("properties"), dict) and not params["properties"]:
             params.pop("properties", None)
@@ -66,13 +62,14 @@ def get_all_tool_schemas(platform: str = "", sender_id: str = "", bot_id: str = 
     return schemas
 
 
+def names() -> list[str]:
+    return sorted(_skills)
+
+
 def list_skills() -> list[dict]:
-    """tl-admin 配权限用：所有技能的名字、说明，以及代码里有没有写死权限（写死的在后台改不了）"""
-    return [{
-        "name": name,
-        "description": s["schema"]["function"].get("description", ""),
-        "code_permissions": s["permissions"],
-    } for name, s in sorted(_skills.items())]
+    """tl-admin 用：所有内置技能的名字和说明"""
+    return [{"name": name, "description": s["schema"]["function"].get("description", "")}
+            for name, s in sorted(_skills.items())]
 
 
 def get_notify(name: str) -> str | None:
@@ -89,5 +86,5 @@ async def execute(name: str, params: dict, ctx: dict) -> str:
     if not skill:
         return f"[未知 skill: {name}]"
 
-    require_permission(name, ctx, skill["permissions"])
+    require_permission(name, ctx)
     return await skill["handler"](params, ctx)

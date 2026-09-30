@@ -2,7 +2,7 @@
 """
 Dynamic Skill Service - 动态技能业务逻辑层
 
-dynamic_skill_manage.py（AI function-call）和 skill_routes.py（Admin API）
+dynamic_skill_manage.py（AI function-call）和 admin_routes.py（Admin API）
 共用此模块，统一校验规则和数据操作。
 """
 import json
@@ -10,6 +10,7 @@ import logging
 import re
 
 from true_love_ai.core.db_engine import SessionLocal
+from true_love_ai.memory import skill_access_service
 from true_love_ai.memory.dynamic_skill_repository import DynamicSkillRepository
 
 LOG = logging.getLogger("DynamicSkillService")
@@ -65,25 +66,6 @@ def normalize_parameters(parameters) -> str | None:
     return None
 
 
-def normalize_permissions(permissions) -> str | None:
-    """将 permissions 规范化为 JSON 字符串或 None；格式非法时抛 ValueError。
-    期望格式：["*"] / ["wechat:*"] / ["wechat:user1", "lark:*"]
-    """
-    if not permissions:
-        return None
-    if isinstance(permissions, list):
-        return json.dumps(permissions, ensure_ascii=False)
-    if isinstance(permissions, str) and permissions.strip():
-        try:
-            parsed = json.loads(permissions)
-            if not isinstance(parsed, list):
-                raise ValueError("permissions 必须是 JSON 数组，如 [\"wechat:*\"]")
-            return permissions.strip()
-        except json.JSONDecodeError:
-            raise ValueError("permissions 必须是合法的 JSON 格式")
-    return None
-
-
 def _to_dict(skill) -> dict:
     return {
         "id": skill.id,
@@ -91,7 +73,7 @@ def _to_dict(skill) -> dict:
         "description": skill.description,
         "command": skill.command,
         "parameters": skill.parameters,
-        "permissions": skill.permissions,
+        "permissions": [skill_access_service.format_point(p) for p in skill_access_service.points_of(skill.id) or []],
         "creator": skill.creator,
         "usage_count": skill.usage_count,
         "last_used_at": skill.last_used_at.isoformat() if skill.last_used_at else None,
@@ -100,9 +82,11 @@ def _to_dict(skill) -> dict:
 
 
 def save_skill(skill_id: str, name: str, description: str, command: str,
-               parameters, creator: str = "admin", permissions=None) -> dict:
+               parameters, creator: str = "admin", points=None, default_points=None) -> dict:
     """验证并保存技能（upsert），返回 {"id": skill_id, "is_update": bool}。
 
+    points：谁能用（权限点，见 skill_access_service），给了就覆盖；
+    default_points：没给 points 时，新技能用它，已有的技能保持原来的权限。
     校验失败抛 ValueError，保存失败抛 RuntimeError。
     """
     if not skill_id or not name or not description or not command:
@@ -112,12 +96,16 @@ def save_skill(skill_id: str, name: str, description: str, command: str,
     if id_err:
         raise ValueError(id_err)
 
+    from true_love_ai.agent import skill_registry
+    if skill_id in skill_registry.names():
+        raise ValueError(f"id「{skill_id}」和内置技能重名了，换一个")
+
     cmd_err = validate_command(command)
     if cmd_err:
         raise ValueError(cmd_err)
 
     params_json = normalize_parameters(parameters)
-    perms_json = normalize_permissions(permissions)
+    parsed_points = skill_access_service.parse_points(points) if points else None
 
     with SessionLocal() as db:
         repo = DynamicSkillRepository(db)
@@ -128,12 +116,14 @@ def save_skill(skill_id: str, name: str, description: str, command: str,
             description=description,
             command=command,
             parameters=params_json,
-            permissions=perms_json,
             creator=creator,
         )
 
     if not ok:
         raise RuntimeError("保存失败，请稍后重试")
+    if parsed_points or existing is None or skill_access_service.points_of(skill_id) is None:
+        skill_access_service.set_points(skill_id, parsed_points or default_points or [skill_access_service.EVERYONE],
+                                        kind=skill_access_service.INSTALLED)
 
     LOG.info("skill/save: id=%s is_update=%s", skill_id, existing is not None)
     return {"id": skill_id, "is_update": existing is not None}
@@ -148,6 +138,7 @@ def delete_skill(skill_id: str) -> dict:
         ok = repo.delete(skill_id)
     if not ok:
         raise ValueError(f"未找到技能 '{skill_id}'")
+    skill_access_service.delete(skill_id)
     LOG.info("skill/delete: id=%s", skill_id)
     return {"id": skill_id}
 

@@ -13,26 +13,23 @@ from typing import Optional, Callable, Awaitable
 from true_love_ai.core.db_engine import SessionLocal
 from true_love_ai.memory.dynamic_skill_repository import DynamicSkillRepository
 from true_love_ai.agent.skills.permission import check_permission
-import json
 from true_love_ai.core.config import get_config
 from true_love_ai.memory import persona_service
 
 LOG = logging.getLogger(__name__)
 
 
-def _load_dynamic_skill_hints(platform: str = "", sender_id: str = "", bot_id: str = "") -> str:
-    """从 DB 读取当前用户有权限的动态技能，返回注入 prompt 的文本。"""
+def _load_dynamic_skill_hints(access: dict) -> str:
+    """从 DB 读取当前用户在这里有权限的动态技能，返回注入 prompt 的文本；access 的字段见 permission"""
     try:
 
         with SessionLocal() as db:
             skills = DynamicSkillRepository(db).list_all()
         if not skills:
             return ""
-        ctx = {"platform": platform, "sender_id": sender_id, "bot_id": bot_id}
         visible = []
         for s in skills:
-            perms = json.loads(s.permissions) if s.permissions else None
-            if check_permission(s.id, ctx, perms):
+            if check_permission(s.id, access):
                 visible.append(f"- {s.id}（{s.name}）: {s.description}")
         return "\n".join(visible)
     except Exception as e:
@@ -145,7 +142,8 @@ class Session:
         """把文本包装成带 cache_control 的 content block（支持 Anthropic prompt caching）"""
         return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
-    def get_messages_for_llm(self, platform: str = "", sender_id: str = "", bot_id: str = "") -> list[dict]:
+    def get_messages_for_llm(self, access: dict) -> list[dict]:
+        """access：谁在哪里问的（platform、bot_id、sender_id、is_group、chat），决定列出哪些技能"""
         from true_love_ai.memory.session_repository import get_session_repo
         from true_love_ai.agent.skill_registry import get_all_tool_schemas
 
@@ -164,10 +162,10 @@ class Session:
                 ),
             })
 
-        skills = get_all_tool_schemas(platform=platform, sender_id=sender_id, bot_id=bot_id)
+        skills = get_all_tool_schemas(access)
         skill_text = "\n".join(f"- {s['function']['name']}: {s['function']['description']}" for s in skills)
 
-        dynamic_skill_text = _load_dynamic_skill_hints(platform=platform, sender_id=sender_id, bot_id=bot_id)
+        dynamic_skill_text = _load_dynamic_skill_hints(access)
         dynamic_section = (
             f"\n\n【动态技能列表】（通过 skill_run 执行，通过 skill_save 新增）\n{dynamic_skill_text}"
             if dynamic_skill_text else ""

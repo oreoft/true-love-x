@@ -14,6 +14,7 @@ import re
 from true_love_ai.agent.skill_registry import register_skill
 from true_love_ai.agent.skills.permission import check_permission
 from true_love_ai.memory import dynamic_skill_service as _ss
+from true_love_ai.memory import skill_access_service
 
 LOG = logging.getLogger("DynamicSkillManage")
 
@@ -76,15 +77,6 @@ def _substitute_params(command: str, param_defs: dict, overrides: dict) -> str:
                         "如 {\"package\": {\"default\": \"wxautox4\", \"desc\": \"包名\"}}"
                     ),
                 },
-                "permissions": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "权限白名单（可选），格式：[\"*\"|\"platform:*\"|\"platform:sender_id\"]，"
-                        "如 [\"wechat:admin123\"] 或 [\"lark:*\", \"wechat:admin123\"]，"
-                        "不填则默认所有人可用"
-                    ),
-                },
             },
             "required": ["id", "name", "description", "command"],
         },
@@ -96,18 +88,20 @@ async def skill_save(params: dict, ctx: dict) -> str:
     description = params.get("description", "").strip()
     command = params.get("command", "").strip()
     param_defs = params.get("parameters") or {}
-    permissions = params.get("permissions") or None
     creator = ctx.get("sender_id", "")
 
+    # 谁能用：群里装的只在这个群，私聊装的在这个号；要改去 tl-admin 的技能页
     try:
-        result = _ss.save_skill(skill_id, name, description, command,
-                                param_defs, creator, permissions)
+        result = _ss.save_skill(skill_id, name, description, command, param_defs, creator,
+                                default_points=skill_access_service.install_points(ctx))
     except (ValueError, RuntimeError) as e:
         return str(e)
 
     action = "更新" if result["is_update"] else "保存"
     LOG.info("dynamic skill %s: id=%s creator=%s", action, skill_id, creator)
-    return f"技能「{name}」已{action}（ID: {skill_id}）。下次直接说触发词就能用了～"
+    where = "这个群里" if ctx.get("is_group") else "这个号上"
+    scope = "" if result["is_update"] else f"默认只有{where}能用，要改范围去后台的技能页。"
+    return f"技能「{name}」已{action}（ID: {skill_id}）。{scope}下次直接说触发词就能用了～"
 
 
 @register_skill({
@@ -146,9 +140,7 @@ async def skill_run(params: dict, ctx: dict) -> str:
     if not skill:
         return f"未找到技能 '{skill_id}'，请检查 ID 是否正确"
 
-    # 检查该动态 skill 自身的权限（融合规则2/3/1）
-    skill_perms: list[str] | None = json.loads(skill["permissions"]) if skill.get("permissions") else None
-    if not check_permission(skill_id, ctx, skill_perms):
+    if not check_permission(skill_id, ctx):
         return "诶嘿~这个技能你没有权限使用哦~"
 
     # 执行前命令安全校验（防止历史数据绕过）
