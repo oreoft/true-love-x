@@ -36,7 +36,7 @@ class MasterNoticeTests(unittest.TestCase):
         url, payload = self.post.call_args.args[:2]
         self.assertEqual(url, "http://server.test:8089/action/send")
         # no bot_id: the server sends it from its default bot, as before
-        self.assertEqual(payload, {"is_master": True, "content": "真爱粉 AI 启动成功啦~ ✨", "token": "token"})
+        self.assertEqual(payload, {"is_master": True, "content": "tl-ai 启动成功", "token": "token"})
 
     def test_ai_still_starts_when_the_notice_cannot_be_sent(self):
         self.post.side_effect = ConnectionError("refused")

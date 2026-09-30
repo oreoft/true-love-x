@@ -15,11 +15,12 @@ from true_love_ai.memory.dynamic_skill_repository import DynamicSkillRepository
 from true_love_ai.agent.skills.permission import check_permission
 import json
 from true_love_ai.core.config import get_config
+from true_love_ai.memory import persona_service
 
 LOG = logging.getLogger(__name__)
 
 
-def _load_dynamic_skill_hints(platform: str = "", sender_id: str = "") -> str:
+def _load_dynamic_skill_hints(platform: str = "", sender_id: str = "", bot_id: str = "") -> str:
     """从 DB 读取当前用户有权限的动态技能，返回注入 prompt 的文本。"""
     try:
 
@@ -27,7 +28,7 @@ def _load_dynamic_skill_hints(platform: str = "", sender_id: str = "") -> str:
             skills = DynamicSkillRepository(db).list_all()
         if not skills:
             return ""
-        ctx = {"platform": platform, "sender_id": sender_id}
+        ctx = {"platform": platform, "sender_id": sender_id, "bot_id": bot_id}
         visible = []
         for s in skills:
             perms = json.loads(s.permissions) if s.permissions else None
@@ -144,7 +145,7 @@ class Session:
         """把文本包装成带 cache_control 的 content block（支持 Anthropic prompt caching）"""
         return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
 
-    def get_messages_for_llm(self, platform: str = "", sender_id: str = "") -> list[dict]:
+    def get_messages_for_llm(self, platform: str = "", sender_id: str = "", bot_id: str = "") -> list[dict]:
         from true_love_ai.memory.session_repository import get_session_repo
         from true_love_ai.agent.skill_registry import get_all_tool_schemas
 
@@ -163,10 +164,10 @@ class Session:
                 ),
             })
 
-        skills = get_all_tool_schemas(platform=platform, sender_id=sender_id)
+        skills = get_all_tool_schemas(platform=platform, sender_id=sender_id, bot_id=bot_id)
         skill_text = "\n".join(f"- {s['function']['name']}: {s['function']['description']}" for s in skills)
 
-        dynamic_skill_text = _load_dynamic_skill_hints(platform=platform, sender_id=sender_id)
+        dynamic_skill_text = _load_dynamic_skill_hints(platform=platform, sender_id=sender_id, bot_id=bot_id)
         dynamic_section = (
             f"\n\n【动态技能列表】（通过 skill_run 执行，通过 skill_save 新增）\n{dynamic_skill_text}"
             if dynamic_skill_text else ""
@@ -197,26 +198,6 @@ class SessionManager:
         self.ttl_seconds = config.session.ttl_seconds
         self.compress_threshold = config.session.compress_threshold
         self.compress_keep_recent = config.session.compress_keep_recent
-        self.default_prompt = config.llm.system_prompt if config.llm else ""
-        self.prompts = config.llm.prompts if config.llm else {}
-        self.user_prompt_map = config.llm.user_prompt_map if config.llm else {}
-
-    def _resolve_prompt(self, prompt_key: str) -> str:
-        """prompt_key 是 "平台:群或人"，user_prompt_map 按它配置"""
-        # 1. 精确匹配（最高优先级）：platform:id
-        prompt_name = self.user_prompt_map.get(prompt_key)
-        if prompt_name and prompt_name in self.prompts:
-            return self.prompts[prompt_name]
-
-        # 2. 平台通配符：platform:*
-        if ":" in prompt_key:
-            platform = prompt_key.split(":", 1)[0]
-            wildcard_name = self.user_prompt_map.get(f"{platform}:*")
-            if wildcard_name and wildcard_name in self.prompts:
-                return self.prompts[wildcard_name]
-
-        # 3. 全局默认
-        return self.default_prompt
 
     def _make_compress_fn(self) -> Callable[[list[dict]], Awaitable[str]]:
         """创建压缩函数，注入 LLM 调用能力（避免 Session 直接依赖 llm_router）"""
@@ -232,29 +213,30 @@ class SessionManager:
             self,
             session_id: str,
             user_ctx: Optional[str] = None,
-            prompt_key: Optional[str] = None,
+            bot_id: str = "",
+            chat: str = "",
+            bot_name: str = "",
     ) -> Session:
         """
         Args:
             session_id: 会话 ID，"bot_id:群或人"
             user_ctx: 发送者的画像，拼进 system prompt
-            prompt_key: 选 prompt 用的 "平台:群或人"，不给时用 session_id
+            bot_id / chat: 选人设用：这个机器人里的群或私聊对象
+            bot_name: 机器人的昵称，换掉人设里的 {name}
         """
-        prompt_key = prompt_key or session_id
+        # 人设每次现查，tl-admin 改了下一条消息就生效
+        prompt = persona_service.resolve(bot_id, chat, bot_name).prompt
+        if user_ctx:
+            prompt = f"{prompt}\n\n## 关于发送者的已知信息\n{user_ctx}"
+        prompt += "\n\n## 回复格式\n微信不支持Markdown渲染，回复只能用纯文本和换行符，不能出现**加粗**、#标题、`代码块`、- 列表、> 引用等任何Markdown符号。"
+
         with self._lock:
             self._cleanup_expired()
-
-            def _build_prompt(base: str) -> str:
-                prompt = base
-                if user_ctx:
-                    prompt = f"{prompt}\n\n## 关于发送者的已知信息\n{user_ctx}"
-                prompt += "\n\n## 回复格式\n微信不支持Markdown渲染，回复只能用纯文本和换行符，不能出现**加粗**、#标题、`代码块`、- 列表、> 引用等任何Markdown符号。"
-                return prompt
-
-            if session_id not in self._sessions:
-                self._sessions[session_id] = Session(
+            session = self._sessions.get(session_id)
+            if session is None:
+                session = self._sessions[session_id] = Session(
                     session_id=session_id,
-                    system_prompt=_build_prompt(self._resolve_prompt(prompt_key)),
+                    system_prompt=prompt,
                     ttl_seconds=self.ttl_seconds,
                     compress_threshold=self.compress_threshold,
                     compress_keep_recent=self.compress_keep_recent,
@@ -262,11 +244,8 @@ class SessionManager:
                 )
                 LOG.debug("创建新会话: %s, has_user_ctx=%s", session_id, bool(user_ctx))
             else:
-                if user_ctx:
-                    session = self._sessions[session_id]
-                    session.system_prompt = _build_prompt(self._resolve_prompt(prompt_key))
-
-            return self._sessions[session_id]
+                session.system_prompt = prompt
+            return session
 
     def _cleanup_expired(self):
         expired = [sid for sid, s in self._sessions.items() if s.is_expired]

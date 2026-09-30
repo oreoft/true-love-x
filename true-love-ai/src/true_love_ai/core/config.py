@@ -9,7 +9,6 @@ from typing import Optional
 import yaml
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from .config_llm import LLMConfig
 from .config_http import HTTPConfig, SessionConfig
 from .config_services import PlatformKeyConfig, NexuConfig
 from true_love_common.observability.logging import LoggingConfig
@@ -20,16 +19,11 @@ LOG = logging.getLogger(__name__)
 class Config(BaseSettings):
     """
     主配置类
-    支持从 config.yaml 和环境变量加载
+    支持从 config.yaml 和环境变量加载。配置文件只放密钥、地址和部署参数；
+    人设、技能权限、模型存在 AI 库里，在 tl-admin 管理。旧配置里的 llm、skill_permissions 段会被忽略。
     """
     model_config = SettingsConfigDict(extra="ignore")
 
-    # 每个 skill 的权限白名单，key 为 skill 名称
-    # 格式：["*"] / ["wechat:*"] / ["wechat:user1", "lark:*"]
-    # 未配置时所有人可用（规则1）；skill 代码/DB 中声明的权限优先（规则2）
-    skill_permissions: dict[str, list[str]] = {}
-
-    llm: Optional[LLMConfig] = None
     http: Optional[HTTPConfig] = None
     session: SessionConfig = SessionConfig()
     platform_key: PlatformKeyConfig = PlatformKeyConfig()
@@ -78,7 +72,6 @@ def reload_config() -> Config:
 
 __all__ = [
     "Config",
-    "LLMConfig",
     "HTTPConfig",
     "SessionConfig",
     "PlatformKeyConfig",

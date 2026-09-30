@@ -1,4 +1,4 @@
-"""Conversations belong to a bot; prompts are still chosen by platform and chat."""
+"""Conversations belong to a bot, and so does the persona that answers in them."""
 
 import types
 import unittest
@@ -7,23 +7,6 @@ from unittest.mock import AsyncMock, patch
 from true_love_common.chat_msg import ChatMsg
 
 from true_love_ai.agent import agent_loop, server_client
-from true_love_ai.core.session import SessionManager
-
-
-class PromptTests(unittest.TestCase):
-    def manager(self, user_prompt_map):
-        manager = SessionManager.__new__(SessionManager)
-        manager.default_prompt = "default"
-        manager.prompts = {"lark": "lark prompt", "vip": "vip prompt"}
-        manager.user_prompt_map = user_prompt_map
-        return manager
-
-    def test_prompt_is_chosen_by_platform_and_chat(self):
-        manager = self.manager({"wechat:群A": "vip", "lark:*": "lark"})
-
-        self.assertEqual(manager._resolve_prompt("wechat:群A"), "vip prompt")
-        self.assertEqual(manager._resolve_prompt("lark:anyone"), "lark prompt")
-        self.assertEqual(manager._resolve_prompt("wechat:群B"), "default")
 
 
 class Stop(Exception):
@@ -34,22 +17,23 @@ class SessionKeyTests(unittest.IsolatedAsyncioTestCase):
     async def test_same_group_on_two_bots_is_two_conversations(self):
         created = []
 
-        def get_or_create(session_id, user_ctx=None, prompt_key=None):
-            created.append((session_id, prompt_key))
+        def get_or_create(session_id, user_ctx=None, bot_id="", chat="", bot_name=""):
+            created.append((session_id, bot_id, chat, bot_name))
             raise Stop()
 
         loop = agent_loop.AgentLoop.__new__(agent_loop.AgentLoop)
         loop.session_manager = types.SimpleNamespace(get_or_create=get_or_create)
 
         for bot_id in ("wxid_m8s", "wxid_ser"):
-            msg = ChatMsg(bot_id=bot_id, platform="wechat", chat_id="群A", sender_id="alice", is_group=True,
-                          content="hi")
+            msg = ChatMsg(bot_id=bot_id, bot_name=f"name of {bot_id}", platform="wechat", chat_id="群A",
+                          sender_id="alice", is_group=True, content="hi")
             with patch.object(agent_loop, "get_user_context", return_value=None) as user_ctx:
                 with self.assertRaises(Stop):
                     await loop.run(msg)
             user_ctx.assert_called_once_with(f"{bot_id}:群A", "alice")
 
-        self.assertEqual(created, [("wxid_m8s:群A", "wechat:群A"), ("wxid_ser:群A", "wechat:群A")])
+        self.assertEqual(created, [("wxid_m8s:群A", "wxid_m8s", "群A", "name of wxid_m8s"),
+                                   ("wxid_ser:群A", "wxid_ser", "群A", "name of wxid_ser")])
 
 
 class ServerClientTests(unittest.IsolatedAsyncioTestCase):

@@ -23,12 +23,10 @@ LOG = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    from true_love_ai.core.db_engine import init_db
-    init_db()
-    LOG.info("真爱粉 AI 服务启动成功...")
+    """应用生命周期管理（数据库在 main 里启动前就初始化好了）"""
+    LOG.info("tl-ai 服务启动成功...")
     yield
-    LOG.info("真爱粉 AI 服务关闭中...")
+    LOG.info("tl-ai 服务关闭中...")
 
 
 def create_app() -> FastAPI:
@@ -36,7 +34,7 @@ def create_app() -> FastAPI:
 
     application = FastAPI(
         title="True Love AI",
-        description="真爱粉 AI 服务 - 你的可爱智能助手~",
+        description="tl-ai：所有机器人共用的 AI 服务",
         version="0.2.0",
         lifespan=lifespan
     )

@@ -62,13 +62,11 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # 模型动态覆盖文件（可读写，支持运行时通过 set_model 持久化）
-      - ./models_override.json:/app/models_override.json
       # 生成的视频目录
       - ./gen_video:/app/gen_video
       # 生成的语音目录
       - ./gen_audio:/app/gen_audio
-      # AI 数据库（用户画像持久化，容器重启不丢失）
+      # AI 数据库（用户画像、人设、技能权限、模型，容器重启不丢失）
       - ./dbs:/app/dbs
     
     # 环境变量（对应 -e）

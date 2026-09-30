@@ -13,34 +13,7 @@ session:
   compress_threshold: 50    # 历史消息超过此条数时触发压缩
   compress_keep_recent: 10  # 压缩时保留最近 N 条完整消息
 
-# ==================== LLM 配置 ====================
-
-llm:
-  # 默认系统提示词（兜底，未配置 user_prompt_map 的用户均使用此提示词）
-  system_prompt: "你是一个可爱的智能助手~"
-  vision_prompt: "你是一个专业的图像分析助手"
-
-  # 命名 prompt 集合（可定义多个，供 user_prompt_map 引用）
-  # prompts:
-  #   academic: "你是一个学术助手..."
-  #   formal: "你是一个正式的助手..."
-
-  # 用户/群 → prompt 名映射（未配置则走 system_prompt）
-  # user_prompt_map:
-  #   wxid_xxxxxx: academic
-  #   room@chatroom: formal
-
-  # 模型配置（完整 LiteLLM 字符串，直接写前缀，不做自动转换）
-  # 单一模型直接写字符串；image/video 支持 default + fallback 自动降级
-  chat:
-    default: "openai/gpt-5.4"
-  compress:
-    default: "openai/gpt-5.4-nano"
-  vision:
-    default: "openai/gpt-5.4"
-  image:
-    default:  "openai/gpt-image-1"
-    fallback: "openai/gemini/imagen-4.0-generate-001"
+# 人设（prompt、语音风格）、技能权限、模型都存在 AI 库里，在 tl-admin 管理，这里不再配置
 
 # ==================== 第三方平台 Key ====================
 
@@ -53,15 +26,3 @@ platform_key:
 nexu:
   base_url: "http://localhost:3010"
   token: ""
-
-# ==================== Skill 权限配置 ====================
-# 格式：["*"] / ["wechat:*"] / ["wechat:sender_id", "lark:*"]
-# 未配置某 skill 时所有人可用（规则1）；skill 代码/DB 中声明的权限优先（规则2）
-
-skill_permissions:
-  skill_save: ["wechat:管理员ID"]
-  list_models: ["wechat:管理员ID"]
-  set_model: ["wechat:管理员ID"]
-  run_job: ["wechat:管理员ID"]
-  reload_config: ["wechat:管理员ID"]
-  listen_manage: ["wechat:管理员ID"]

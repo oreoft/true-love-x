@@ -41,6 +41,9 @@ def init_db():
         from true_love_ai.models.session_message import SessionMessage  # noqa: F401
         from true_love_ai.models.dynamic_skill import DynamicSkill  # noqa: F401
         from true_love_ai.models.schema_migration import SchemaMigration  # noqa: F401
+        from true_love_ai.models.persona import Persona  # noqa: F401
+        from true_love_ai.models.skill_permission import SkillPermission  # noqa: F401
+        from true_love_ai.models.model_setting import ModelSetting  # noqa: F401
 
         Base.metadata.create_all(bind=engine)
 

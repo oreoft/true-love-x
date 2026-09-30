@@ -1,7 +1,7 @@
 [project]
 name = "true-love-ai"
 version = "0.2.0"
-description = "True Love AI service - 真爱粉 AI 服务"
+description = "True Love AI service - tl-ai"
 requires-python = ">=3.12"
 dependencies = [
     "true-love-common",

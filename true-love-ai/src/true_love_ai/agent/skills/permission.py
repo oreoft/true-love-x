@@ -3,15 +3,15 @@
 Skill 权限管理 - 融合规则
 
 规则优先级：
-  规则2（代码/DB 声明）> 规则3（config 配置）> 规则1（默认开放）
+  规则2（代码/DB 声明）> 规则3（tl-admin 里按机器人配的规则）> 规则1（默认开放）
 
 权限格式（list[str]）：
   ["*"]                          — 所有平台所有人
   ["wechat:*"]                   — 微信全员
   ["wechat:admin", "lark:*"]     — 微信特定用户 + 飞书全员
-  ["wechat:user1"]               — 单个用户
+  ["wechat:user1"]               — 单个用户（微信是昵称，base 读不到对方的 wxid）
 """
-from true_love_ai.core.config import get_config
+from true_love_ai.memory import skill_permission_service
 
 
 class PermissionDenied(Exception):
@@ -36,7 +36,7 @@ def check_permission(skill_name: str, ctx: dict,
     """融合规则检查权限，返回 True 表示允许。
 
     规则2: skill 代码/DB 声明了 permissions → 用 code_permissions
-    规则3: 没有代码权限，但 config.skill_permissions[skill_name] 有配置 → 用 config
+    规则3: 没有代码权限，但 ctx["bot_id"] 这个机器人（或所有机器人）配了这个技能的规则 → 用它
     规则1: 都没有 → 开放
     """
     platform = ctx.get("platform", "")
@@ -45,9 +45,9 @@ def check_permission(skill_name: str, ctx: dict,
     if code_permissions is not None:
         return _check_perm(code_permissions, platform, sender_id)
 
-    config_perms = get_config().skill_permissions.get(skill_name)
-    if config_perms is not None:
-        return _check_perm(config_perms, platform, sender_id)
+    configured = skill_permission_service.lookup(ctx.get("bot_id", ""), skill_name)
+    if configured is not None:
+        return _check_perm(configured, platform, sender_id)
 
     return True
 

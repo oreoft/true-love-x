@@ -18,7 +18,7 @@ LOG = logging.getLogger(__name__)
 def notice_master():
     """启动通知"""
     try:
-        notify_master_sync("真爱粉 AI 启动成功啦~ ✨")
+        notify_master_sync("tl-ai 启动成功")
     except Exception as e:
         LOG.warning(f"启动通知发送失败: {e}")
 
@@ -29,7 +29,7 @@ def setup_signal_handlers():
     def handler(sig, frame):
         LOG.info("收到关闭信号，正在退出...")
         try:
-            notify_master_sync("真爱粉 AI 正在关闭...")
+            notify_master_sync("tl-ai 正在关闭...")
         except Exception:
             pass
         exit(0)
@@ -42,6 +42,10 @@ def main():
     """主入口"""
     # 加载配置（日志已在 config 模块初始化时配置）
     config = get_config()
+
+    # 初始化数据库（人设、技能权限、模型都存在库里，后面的初始化要用）
+    from true_love_ai.core.db_engine import init_db
+    init_db()
 
     # 初始化 LLM 客户端
     init_llm()
@@ -58,7 +62,7 @@ def main():
     notice_master()
 
     LOG.info("=" * 50)
-    LOG.info("真爱粉 AI 服务启动中...")
+    LOG.info("tl-ai 服务启动中...")
     LOG.info(f"版本: 0.2.0")
     LOG.info("=" * 50)
 

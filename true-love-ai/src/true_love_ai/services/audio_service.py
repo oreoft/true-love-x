@@ -18,9 +18,6 @@ LOG = logging.getLogger(__name__)
 GEN_AUDIO_DIR = Path("gen_audio")
 GEN_AUDIO_DIR.mkdir(exist_ok=True)
 
-# 固定语音风格：贴合真爱粉"16岁调皮可爱二次元萝莉"人设
-_STYLE_PREFIX = "请用软萌可爱、俏皮活泼、带点小傲娇的16岁萝莉少女音色朗读，语调轻快、尾音略微上扬：\n"
-
 
 class AudioService:
 
@@ -33,21 +30,23 @@ class AudioService:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
 
-    async def text_to_speech(self, text: str, voice: str = "Kore") -> AudioResponse:
+    async def text_to_speech(self, text: str, voice: str = "Kore", style: str = "") -> AudioResponse:
+        """style：语音风格描述（来自人设），加在正文前面让模型按这个风格朗读"""
+        text_input = f"{style}\n{text}" if style else text
         default_model = self.registry.get("tts", "default")
         fallback_model = self.registry.get("tts", "fallback")
 
         try:
-            return await self._generate_by_model(text, default_model, voice)
+            return await self._generate_by_model(text, text_input, default_model, voice)
         except Exception as e:
             if fallback_model:
                 LOG.warning("主力语音合成失败，降级备用模型 %s: %s", fallback_model, e)
-                return await self._generate_by_model(text, fallback_model, voice)
+                return await self._generate_by_model(text, text_input, fallback_model, voice)
             raise
 
-    async def _generate_by_model(self, text: str, model: str, voice: str) -> AudioResponse:
+    async def _generate_by_model(self, text: str, text_input: str, model: str, voice: str) -> AudioResponse:
         LOG.info("生成语音: model=%s voice=%s", model, voice)
-        body = {"model": model, "input": f"{_STYLE_PREFIX}{text}", "voice": voice}
+        body = {"model": model, "input": text_input, "voice": voice}
 
         resp = await async_post(f"{self.base_url}/v1/audio/speech", headers=self._headers(), json=body, timeout=60.0)
         self._raise_for_audio_error(resp)

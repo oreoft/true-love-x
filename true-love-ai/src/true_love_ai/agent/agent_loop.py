@@ -59,8 +59,6 @@ class AgentLoop:
         # 会话按机器人隔离：同名的群在不同的号里是不同的会话；用户画像跟着会话走（每个群一份、私聊一份）
         _session_base = chat_id if is_group else sender_id
         session_id = f"{bot_id}:{_session_base}"
-        # prompt 映射仍按"平台:群或人"配置
-        prompt_key = f"{platform}:{_session_base}"
         at_user = sender_id if is_group else ""
         receiver = chat_id if is_group else sender_id
 
@@ -76,14 +74,16 @@ class AgentLoop:
 
         # 获取用户画像并注入 session
         user_ctx = get_user_context(session_id, sender_id)
-        session = self.session_manager.get_or_create(session_id, user_ctx=user_ctx, prompt_key=prompt_key)
+        # 人设按"这个机器人里的这个群或人"选，名字用 base 带来的昵称
+        session = self.session_manager.get_or_create(session_id, user_ctx=user_ctx, bot_id=bot_id,
+                                                     chat=_session_base, bot_name=msg.bot_name)
         session.add_message("user", user_content)
 
         # 获取当前用户有权限使用的 tools
-        tools = skill_registry.get_all_tool_schemas(platform=platform, sender_id=sender_id)
+        tools = skill_registry.get_all_tool_schemas(platform=platform, sender_id=sender_id, bot_id=bot_id)
 
         # 开始 Agent Loop
-        messages = session.get_messages_for_llm(platform=platform, sender_id=sender_id)
+        messages = session.get_messages_for_llm(platform=platform, sender_id=sender_id, bot_id=bot_id)
         reply = None
 
         for iteration in range(MAX_TOOL_ITERATIONS):

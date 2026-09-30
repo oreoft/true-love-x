@@ -45,13 +45,13 @@ def register_skill(schema: dict):
     return decorator
 
 
-def get_all_tool_schemas(platform: str = "", sender_id: str = "") -> list[dict]:
-    """获取当前用户有权限使用的 skill tool schema 列表（供 LLM tools 参数使用）"""
+def get_all_tool_schemas(platform: str = "", sender_id: str = "", bot_id: str = "") -> list[dict]:
+    """获取当前用户在这个机器人上有权限使用的 skill tool schema 列表（供 LLM tools 参数使用）"""
     import copy
     from true_love_ai.agent.skills.permission import check_permission
 
     schemas = []
-    ctx = {"platform": platform, "sender_id": sender_id}
+    ctx = {"platform": platform, "sender_id": sender_id, "bot_id": bot_id}
     for name, s in _skills.items():
         if not check_permission(name, ctx, s["permissions"]):
             continue
@@ -64,6 +64,15 @@ def get_all_tool_schemas(platform: str = "", sender_id: str = "") -> list[dict]:
             params.pop("required", None)
         schemas.append(schema)
     return schemas
+
+
+def list_skills() -> list[dict]:
+    """tl-admin 配权限用：所有技能的名字、说明，以及代码里有没有写死权限（写死的在后台改不了）"""
+    return [{
+        "name": name,
+        "description": s["schema"]["function"].get("description", ""),
+        "code_permissions": s["permissions"],
+    } for name, s in sorted(_skills.items())]
 
 
 def get_notify(name: str) -> str | None:

@@ -40,8 +40,11 @@ async def generate_audio(params: dict, ctx: dict) -> str:
         return "诶嘿~请告诉我你想让我说什么哦~"
 
     try:
+        from true_love_ai.memory import persona_service
         from true_love_ai.services.audio_service import AudioService, GEN_AUDIO_DIR
-        result = await AudioService().text_to_speech(text=text)
+        # 语音风格跟着人设走：receiver 就是这次回复的群或私聊对象
+        style = persona_service.resolve(ctx.get("bot_id", ""), receiver).voice_style
+        result = await AudioService().text_to_speech(text=text, style=style)
 
         if result and result.audio_id:
             from true_love_ai.agent.server_client import send_file

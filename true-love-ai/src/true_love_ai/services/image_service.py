@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Optional
 
 from true_love_common.http.client import async_get
-from true_love_ai.core.config import get_config
 from true_love_ai.core.model_registry import get_model_registry
 from true_love_ai.llm.router import get_llm_router, get_openai_client
 from true_love_ai.models.response import ImageResponse
@@ -17,11 +16,13 @@ GEN_IMG_DIR.mkdir(exist_ok=True)
 LOG = logging.getLogger(__name__)
 
 
+# 识图时加在用户问题前面的提示
+VISION_PROMPT = "请根据需要分析图片"
+
+
 class ImageService:
 
     def __init__(self):
-        cfg = get_config()
-        self.llm = cfg.llm
         self.llm_router = get_llm_router()
         self.registry = get_model_registry()
 
@@ -79,9 +80,8 @@ class ImageService:
         is_debug = content.startswith("debug")
         clean_content = content.removeprefix("debug").strip() if is_debug else content
 
-        analyze_prompt = self.llm.vision_prompt if self.llm else "请分析这张图片"
         result = await self.llm_router.vision(
-            prompt=f"{analyze_prompt}\n\n用户问题: {clean_content}",
+            prompt=f"{VISION_PROMPT}\n\n用户问题: {clean_content}",
             image_data=img_data,
             model=model,
         )

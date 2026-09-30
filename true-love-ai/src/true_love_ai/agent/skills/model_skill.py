@@ -3,6 +3,7 @@
 import logging
 
 from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.core.model_registry import CATEGORIES
 
 LOG = logging.getLogger("ModelSkill")
 
@@ -34,7 +35,7 @@ async def list_models(params: dict, ctx: dict) -> str:
     "function": {
         "name": "set_model",
         "description": (
-            "动态修改指定类别的模型，修改后立即生效并持久化，重启后仍保留。"
+            "修改指定类别的模型，所有机器人共用，修改后立即生效并存进库里，重启后仍保留。"
             "当用户说'把聊天模型换成xxx'、'图片生成改用xxx'时使用。"
         ),
         "parameters": {
@@ -42,13 +43,13 @@ async def list_models(params: dict, ctx: dict) -> str:
             "properties": {
                 "category": {
                     "type": "string",
-                    "enum": ["chat", "compress", "vision", "image", "video"],
+                    "enum": CATEGORIES,
                     "description": "模型类别",
                 },
                 "key": {
                     "type": "string",
                     "enum": ["default", "fallback"],
-                    "description": "default=主力模型，fallback=降级备用（只有 image/video 会用到 fallback）",
+                    "description": "default=主力模型，fallback=主力失败时的备用",
                 },
                 "value": {
                     "type": "string",
@@ -73,7 +74,9 @@ async def set_model(params: dict, ctx: dict) -> str:
         old = registry.get(category, key) if key in registry.all().get(category, {}) else "（未配置）"
         registry.set(category, key, value)
         LOG.info("模型已更新: %s.%s: %s → %s", category, key, old, value)
-        return f"好的，已将 {category}.{key} 从 {old} 更新为 {value}，已持久化。"
+        return f"好的，已将 {category}.{key} 从 {old} 更新为 {value}，已保存。"
+    except ValueError as e:
+        return f"更新失败: {e}"
     except Exception as e:
         LOG.error("set_model 失败: %s", e)
         return f"更新失败: {e}"

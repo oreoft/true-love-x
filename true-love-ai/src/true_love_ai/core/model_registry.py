@@ -1,58 +1,46 @@
 # -*- coding: utf-8 -*-
 """
 模型注册表
-统一管理所有 LiteLLM 模型字符串，支持 override 文件持久化覆盖。
+所有机器人共用一套模型：代码里是默认值，改过的存在 AI 库的 model_settings 表，
+tl-admin（经 server 转发）和 set_model 技能都改库，改完立即生效。
 
-配置直接写完整 LiteLLM 字符串（如 openai/gpt-5.4），不再做前缀转换。
+模型直接写完整 LiteLLM 字符串（如 openai/gpt-5.4），不做前缀转换。
 """
-import json
 import logging
-from pathlib import Path
 from typing import Optional
+
+from true_love_ai.core.db_engine import SessionLocal
+from true_love_ai.models.model_setting import ModelSetting
 
 LOG = logging.getLogger(__name__)
 
-OVERRIDE_FILE = Path("models_override.json")
+# {类别: {key: 模型}}；default 是主力，fallback 是主力失败时的备用
+DEFAULT_MODELS: dict[str, dict[str, str]] = {
+    "chat":       {"default": "2api/openai/gpt-5.6-sol", "fallback": "gemini/gemini-3-pro"},
+    "compress":   {"default": "openai/gpt-5.6-luna"},
+    "vision":     {"default": "2api/openai/gpt-5.6-sol"},
+    "image":      {"default": "2api/openai/gpt-image-2", "fallback": "gemini/gemini-3-pro-image"},
+    "image_edit": {"default": "2api/openai/gpt-image-2", "fallback": "openai/gpt-image-1.5"},
+    "video":      {"default": "gemini/veo-3.1-fast-generate-preview", "fallback": "openai/sora-2-pro"},
+    "tts":        {"default": "gemini/gemini-3.1-flash-tts-preview"},
+}
+CATEGORIES = list(DEFAULT_MODELS)
+KEYS = ("default", "fallback")
 
 
 class ModelRegistry:
 
     def __init__(self):
-        # {category: {key: model_string}}
-        # 单一模型类别只有 "default" key；支持降级的有 "default" + "fallback"
         self._models: dict[str, dict[str, str]] = {}
 
-    def load(self, config) -> None:
-        llm = config.llm
-        if not llm:
-            return
-
-        def _entry(m) -> dict[str, str]:
-            e = {"default": m.default}
-            if m.fallback:
-                e["fallback"] = m.fallback
-            return e
-
-        self._models = {
-            "chat":       _entry(llm.chat),
-            "compress":   _entry(llm.compress),
-            "vision":     _entry(llm.vision),
-            "image":      _entry(llm.image),
-            "image_edit": _entry(llm.image_edit),
-            "video":      _entry(llm.video),
-            "tts":        _entry(llm.tts),
-        }
-
-        if OVERRIDE_FILE.exists():
-            try:
-                overrides = json.loads(OVERRIDE_FILE.read_text(encoding="utf-8"))
-                for cat, keys in overrides.items():
-                    for key, value in keys.items():
-                        self._models.setdefault(cat, {})[key] = value
-                LOG.info("已加载模型 override: %s", OVERRIDE_FILE)
-            except Exception as e:
-                LOG.error("加载 models_override.json 失败: %s", e)
-
+    def load(self) -> None:
+        """代码默认值叠上库里改过的"""
+        models = {cat: dict(keys) for cat, keys in DEFAULT_MODELS.items()}
+        with SessionLocal() as db:
+            for row in db.query(ModelSetting).all():
+                if row.category in models and row.key in KEYS:
+                    models[row.category][row.key] = row.value
+        self._models = models
         LOG.info("ModelRegistry 加载完成: %d 个类别", len(self._models))
 
     def get(self, category: str, key: str = "default") -> str:
@@ -64,21 +52,39 @@ class ModelRegistry:
             raise KeyError(f"模型未找到: {category}.{key}，当前配置: {self._models}")
 
     def set(self, category: str, key: str, value: str) -> None:
-        self._models.setdefault(category, {})[key] = value
-        self._save_override()
-        LOG.info("模型已更新: %s.%s = %s", category, key, value)
+        """改一个模型；value 为空时恢复代码里的默认值。Raises: ValueError"""
+        category, key, value = category.strip(), key.strip(), value.strip()
+        if category not in DEFAULT_MODELS:
+            raise ValueError(f"没有这个类别：{category}，可选 {', '.join(CATEGORIES)}")
+        if key not in KEYS:
+            raise ValueError("key 只能是 default 或 fallback")
+        if not value and key == "default" and "default" not in DEFAULT_MODELS[category]:
+            raise ValueError("主力模型不能为空")
+        with SessionLocal() as db:
+            row = db.get(ModelSetting, (category, key))
+            if value:
+                if row is None:
+                    row = ModelSetting(category=category, key=key)
+                    db.add(row)
+                row.value = value
+            elif row is not None:
+                db.delete(row)
+            db.commit()
+        self.load()
+        LOG.info("模型已更新: %s.%s = %s", category, key, value or "（默认）")
 
     def all(self) -> dict[str, dict[str, str]]:
         return {cat: dict(keys) for cat, keys in self._models.items()}
 
-    def _save_override(self) -> None:
-        try:
-            OVERRIDE_FILE.write_text(
-                json.dumps(self._models, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except Exception as e:
-            LOG.error("写入 models_override.json 失败: %s", e)
+    def describe(self) -> list[dict]:
+        """tl-admin 用：每个类别当前的主力、备用和各自的默认值"""
+        return [{
+            "category": cat,
+            "default": self._models[cat].get("default", ""),
+            "fallback": self._models[cat].get("fallback", ""),
+            "builtin_default": DEFAULT_MODELS[cat].get("default", ""),
+            "builtin_fallback": DEFAULT_MODELS[cat].get("fallback", ""),
+        } for cat in CATEGORIES]
 
 
 _registry: Optional[ModelRegistry] = None
