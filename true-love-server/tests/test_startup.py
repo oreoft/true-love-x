@@ -22,7 +22,7 @@ class StartupTests(ServerCase):
 
         self.start()
 
-        self.assertEqual(self.bases.sent(), [(f"{default}/send/text", {"is_master": True, "content": "真爱粉server启动成功..."})])
+        self.assertEqual(self.bases.sent(), [(f"{default}/send/text", {"is_master": True, "content": "tl-server 启动成功"})])
 
     def test_bots_registered_before_a_restart_get_their_reminders_back(self):
         self.register("wxid_ser")

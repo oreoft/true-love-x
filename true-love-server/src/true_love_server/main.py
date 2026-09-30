@@ -2,7 +2,7 @@
 """
 Main Entry Point - 主入口
 
-启动真爱粉服务端。
+启动 tl-server。
 """
 
 import asyncio
@@ -33,11 +33,11 @@ def _run_async(coro):
 
 def notice_master():
     """启动通知和信号处理：从默认机器人发给它的管理员，管理员是谁由 base 决定"""
-    _run_async(base_client.send_to_master("", "真爱粉server启动成功..."))
+    _run_async(base_client.send_to_master("", "tl-server 启动成功"))
 
     def handler(sig, frame):
         """退出前清理环境"""
-        _run_async(base_client.send_to_master("", "真爱粉server正在关闭..."))
+        _run_async(base_client.send_to_master("", "tl-server 正在关闭..."))
         exit(0)
 
     signal.signal(signal.SIGINT, handler)

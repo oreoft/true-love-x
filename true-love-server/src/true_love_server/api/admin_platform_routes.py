@@ -4,8 +4,7 @@ Admin Platform Routes - tl-admin 里和机器人无关的管理接口（/admin/*
 
 - /admin/tasks/options：定时任务可选的任务方法和时区
 - /admin/loki/logs：查 Loki 日志，可以按服务和机器人筛选
-- /admin/skill/*：动态技能，转发给 AI 的管理接口
-按机器人管理的接口在 admin_bot_routes。
+按机器人管理的接口在 admin_bot_routes；存在 AI 那边的设置（技能、人设、技能权限、模型）在 admin_ai_routes。
 """
 
 import logging
@@ -15,7 +14,6 @@ from fastapi import APIRouter
 
 from .exception_handlers import ApiResponse, ValidationException
 from ..services import task_service
-from ..services.ai_client import admin as ai_admin
 from ..services.loki_client import get_loki_client
 
 LOG = logging.getLogger("AdminPlatformRoutes")
@@ -69,46 +67,3 @@ async def query_loki_logs(before_ns: int = None, services: str = '', keyword: st
     next_before_ns = str(min(int(log["ts_ns"]) for log in logs)) if logs and has_more else ""
     return ApiResponse(data={"logs": logs, "next_before_ns": next_before_ns, "has_more": has_more,
                              "count": len(logs)})
-
-
-# ==================== 动态技能（转发给 AI） ====================
-
-@admin_platform_router.get("/skill/list")
-async def list_skills():
-    try:
-        skills = await ai_admin.list_skills()
-    except RuntimeError as e:
-        raise ValidationException(str(e))
-    return ApiResponse(data={"skills": skills, "total": len(skills)})
-
-
-@admin_platform_router.post("/skill/save")
-async def save_skill(request: dict):
-    skill_id = request.get("id", "").strip()
-    name = request.get("name", "").strip()
-    description = request.get("description", "").strip()
-    command = request.get("command", "").strip()
-    parameters = request.get("parameters") or ""
-    permissions = request.get("permissions") or None
-    if not skill_id or not name or not description or not command:
-        raise ValidationException("id、name、description、command 不能为空")
-    try:
-        data = await ai_admin.save_skill(skill_id, name, description, command,
-                                         parameters.strip() if parameters.strip() else None, permissions)
-    except RuntimeError as e:
-        raise ValidationException(str(e))
-    LOG.info("admin/skill/save: id=%s", skill_id)
-    return ApiResponse(data=data)
-
-
-@admin_platform_router.post("/skill/delete")
-async def delete_skill(request: dict):
-    skill_id = request.get("id", "").strip()
-    if not skill_id:
-        raise ValidationException("id 不能为空")
-    try:
-        data = await ai_admin.delete_skill(skill_id)
-    except RuntimeError as e:
-        raise ValidationException(str(e))
-    LOG.info("admin/skill/delete: id=%s", skill_id)
-    return ApiResponse(data=data)

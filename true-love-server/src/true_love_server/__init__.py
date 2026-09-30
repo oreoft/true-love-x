@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-True Love Server - 真爱粉服务端
+True Love Server - tl-server，多个机器人共用的服务端
 
 微信机器人后端服务，处理消息和定时任务。
 """

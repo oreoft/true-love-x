@@ -7,7 +7,8 @@ FastAPI Application - FastAPI 应用
 - open_routes：外部调用方（/send-msg、/ping、/health）
 - base_routes：各平台的 base（/base/*）
 - ai_routes：AI 的业务回调（/action/*）
-- admin_bot_routes、admin_platform_routes：tl-admin（/admin/*），页面本身是 /admin
+- admin_bot_routes、admin_platform_routes、admin_ai_routes：tl-admin（/admin/*），页面本身是 /admin；
+  admin_ai_routes 是存在 AI 那边的设置，原样转发给 AI
 - /media：server 自己的图片（摸鱼图、早报图），base 下载后发送
 """
 
@@ -22,6 +23,7 @@ from fastapi.responses import FileResponse
 from true_love_common.integrations.fastapi import HttpLoggingMiddleware
 from true_love_common.media import media_router
 
+from .admin_ai_routes import admin_ai_router
 from .admin_bot_routes import admin_bot_router
 from .admin_platform_routes import admin_platform_router
 from .ai_routes import ai_router
@@ -66,7 +68,7 @@ def create_app() -> FastAPI:
     """创建 FastAPI 应用实例"""
     app = FastAPI(
         title="True Love Server",
-        description="真爱粉服务端 - 多个机器人共用的中转层，连接各平台的 base 和 AI",
+        description="tl-server：多个机器人共用的中转层，连接各平台的 base 和 AI",
         version="0.2.0",
         lifespan=lifespan,
     )
@@ -94,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(ai_router)
     app.include_router(admin_bot_router)
     app.include_router(admin_platform_router)
+    app.include_router(admin_ai_router)
     app.include_router(media_router(MEDIA_DIRS))
 
     # /admin 路径返回 tl-admin 页面
