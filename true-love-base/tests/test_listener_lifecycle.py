@@ -340,7 +340,7 @@ class ListenerLifecycleTests(unittest.TestCase):
             robot = self.run_main(changes=[self.go_offline, lambda: None])
 
         self.assertEqual(robot.send_text_msg.call_count, 1)
-        self.assertIn("started successfully", robot.send_text_msg.call_args.args[0])
+        self.assertIn("tl-base 启动成功", robot.send_text_msg.call_args.args[0])
         self.assertEqual(self.events, ["http", "load", "stop-sdk", "drain"])
 
     def test_master_can_tell_a_reconnect_from_a_fresh_start(self):
@@ -348,10 +348,10 @@ class ListenerLifecycleTests(unittest.TestCase):
             robot = self.run_main(changes=[self.go_offline, lambda: None, self.come_back])
 
         started, reconnected, stopping = [call.args[0] for call in robot.send_text_msg.call_args_list]
-        self.assertIn("started successfully", started)
-        self.assertIn("reconnected", reconnected)
-        self.assertNotIn("started successfully", reconnected)
-        self.assertIn("shutting down", stopping)
+        self.assertIn("tl-base 启动成功", started)
+        self.assertIn("重新连上微信", reconnected)
+        self.assertNotIn("启动成功", reconnected)
+        self.assertIn("tl-base 正在关闭", stopping)
 
     def test_master_is_told_when_the_server_list_is_unavailable(self):
         with self.assertLogs("Main", level="ERROR"):

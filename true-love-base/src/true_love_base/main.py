@@ -107,7 +107,7 @@ def main():
 
         if announced and robot.master and client.is_connected():
             try:
-                if not robot.send_text_msg("True Love Base shutting down...", robot.master):
+                if not robot.send_text_msg("tl-base 正在关闭...", robot.master):
                     LOG.warning("Shutdown notification was not delivered to [%s]", robot.master)
             except Exception:
                 LOG.warning("Failed to send shutdown notification to [%s]", robot.master, exc_info=True)
@@ -158,7 +158,7 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
         failed_list_str = "\n".join(
             [f"  {i + 1}. {name}" for i, name in enumerate(failed_chats)]) if failed_chats else "  (无)"
 
-        headline = "WeChat reconnected!" if reconnected else "True Love Base started successfully!"
+        headline = "tl-base 重新连上微信" if reconnected else "tl-base 启动成功"
         startup_msg = f"{headline}\n\n当前监听列表 ({len(success_chats)}个):\n{success_list_str}"
         if failed_chats:
             startup_msg += f"\n\n监听失败 ({len(failed_chats)}个):\n{failed_list_str}"
