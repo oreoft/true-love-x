@@ -89,7 +89,6 @@ class LoggingConfig:
         loki_url: str = "",
         loki_user_id: str = "",
         loki_api_key: str = "",
-        loki_tags: dict[str, str] | None = None,
     ) -> None:
         if cls._initialized:
             return
@@ -116,7 +115,7 @@ class LoggingConfig:
                 loki_handler = LokiQueueHandler(
                     Queue(queue_size),
                     url=f"{loki_url.rstrip('/')}/loki/api/v1/push",
-                    tags={"service_name": service_name, **(loki_tags or {})},
+                    tags={"service_name": service_name},
                     auth=(loki_user_id, loki_api_key),
                     version="1",
                 )
@@ -144,6 +143,24 @@ class LoggingConfig:
             json_format,
             extra={"extra_fields": {"loki": loki_enabled}},
         )
+
+    @classmethod
+    def add_loki_tags(cls, provider) -> None:
+        """
+        给之后的每条日志补上 Loki 标签，provider() 返回 {标签: 值}，值为空的不加
+
+        用于启动后才知道的标签，比如 base 连上微信后才读到的 bot_id。
+        """
+        class _TagFilter(logging.Filter):
+            def filter(self, record: logging.LogRecord) -> bool:
+                tags = {key: value for key, value in (provider() or {}).items() if value}
+                if tags:
+                    record.tags = {**getattr(record, "tags", {}), **tags}
+                return True
+
+        tag_filter = _TagFilter()
+        for handler in logging.getLogger().handlers:
+            handler.addFilter(tag_filter)
 
     @classmethod
     def _ensure_utf8_stdout(cls) -> None:

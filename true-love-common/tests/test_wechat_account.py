@@ -24,17 +24,17 @@ class CurrentWxidTests(unittest.TestCase):
             os.utime(path, (1, 1))
 
     def test_the_account_written_most_recently_is_logged_in(self):
-        self.account("wxid_49m6kifyirmi12_3ab7", written_at=1_000)
-        self.account("wxid_oc36wts1bhxr19_4e4f", written_at=2_000)
+        self.account("wxid_oldaccount01_3ab7", written_at=1_000)
+        self.account("wxid_currentbot01_4e4f", written_at=2_000)
 
-        self.assertEqual(current_wxid(self.root), "wxid_oc36wts1bhxr19")
+        self.assertEqual(current_wxid(self.root), "wxid_currentbot01")
 
     def test_directories_that_are_not_accounts_are_ignored(self):
-        self.account("wxid_ii1pon2s4t4h22_8537", written_at=1_000)
+        self.account("wxid_onlybot0001_8537", written_at=1_000)
         (self.root / "all_users").mkdir()
         (self.root / "wxid_stray.txt").write_text("")
 
-        self.assertEqual(current_wxid(self.root), "wxid_ii1pon2s4t4h22")
+        self.assertEqual(current_wxid(self.root), "wxid_onlybot0001")
 
     def test_no_account_is_an_error(self):
         (self.root / "all_users").mkdir()
@@ -47,8 +47,8 @@ class CurrentWxidTests(unittest.TestCase):
             current_wxid(self.root / "missing")
 
     def test_accounts_written_at_the_same_time_are_not_guessed(self):
-        self.account("wxid_49m6kifyirmi12_3ab7", written_at=1_000)
-        self.account("wxid_oc36wts1bhxr19_4e4f", written_at=1_000)
+        self.account("wxid_oldaccount01_3ab7", written_at=1_000)
+        self.account("wxid_currentbot01_4e4f", written_at=1_000)
 
         with self.assertRaisesRegex(WxidNotFound, "分不出"):
             current_wxid(self.root)

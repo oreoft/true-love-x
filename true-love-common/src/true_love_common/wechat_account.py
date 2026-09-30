@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import Optional
 
-# wxid_ii1pon2s4t4h22_8537 -> wxid_ii1pon2s4t4h22
+# wxid_abc123def456_8537 -> wxid_abc123def456
 _ACCOUNT_DIR = re.compile(r"^(wxid_[0-9a-z]+)_[0-9a-z]{4}$", re.IGNORECASE)
 
 
