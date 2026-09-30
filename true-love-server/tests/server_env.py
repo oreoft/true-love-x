@@ -19,12 +19,14 @@ from true_love_common.http.client import HttpResult
 
 SERVER_ROOT = Path(__file__).parents[1]
 TOKEN = "token"
+DEFAULT_BOT_ID = "wxid_default"
 
 # The server reads config-dev.yaml from its working directory while it is imported.
 _HOME = Path(tempfile.mkdtemp(prefix="tl-server-test-"))
 atexit.register(shutil.rmtree, _HOME, True)
 (_HOME / "config-dev.yaml").write_text(
-    f'http_token: ["{TOKEN}"]\nalapi: {{token: "alapi"}}\nhttp: {{host: 127.0.0.1, port: 8088}}\n', encoding="utf-8")
+    f'http_token: ["{TOKEN}"]\nalapi: {{token: "alapi"}}\nhttp: {{host: 127.0.0.1, port: 8088}}\n'
+    f'default_bot_id: "{DEFAULT_BOT_ID}"\n', encoding="utf-8")
 _previous = os.getcwd()
 os.environ.pop("APP_ENV", None)
 os.chdir(_HOME)

@@ -9,6 +9,10 @@
 # (kept in the bots table of dbs/platform.db). Each bot's data is in dbs/<bot_id>.db.
 # Who the master is, is known only to base (see true-love-base/config.yaml.example).
 
+# The bot used when a caller names none (outside /send-msg, server start/stop notices, AI notices to the master):
+# the wxid of that WeChat account
+default_bot_id: "wxid_your_default_bot"
+
 # Tokens accepted by this server; the first one is also used when calling AI
 http_token: ["your_secret_token"]
 

@@ -4,11 +4,10 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from server_env import ServerCase
+from server_env import DEFAULT_BOT_ID, ServerCase
 from true_love_common.chat_msg import ChatMsg
 from true_love_server.core.db_engine import bot_session
 from true_love_server.services import listen_store, task_service
-from true_love_server.services.bot_registry import DEFAULT_BOT_ID
 from true_love_server.services.group_message_repository import GroupMessageRepository
 
 

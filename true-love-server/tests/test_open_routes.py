@@ -2,8 +2,7 @@
 
 import unittest
 
-from server_env import ServerCase
-from true_love_server.services.bot_registry import DEFAULT_BOT_ID
+from server_env import DEFAULT_BOT_ID, ServerCase
 
 
 class SendMsgTests(ServerCase):
@@ -35,6 +34,17 @@ class SendMsgTests(ServerCase):
         response = self.post("/send-msg", sendReceiver="master", content="deployed")
 
         self.assertIn(DEFAULT_BOT_ID, response["message"])
+
+    def test_push_without_a_configured_default_bot_says_so(self):
+        from unittest.mock import patch
+        from true_love_server.core import Config
+
+        self.register(DEFAULT_BOT_ID)
+        with patch.object(Config(), "DEFAULT_BOT_ID", ""):
+            response = self.post("/send-msg", sendReceiver="master", content="deployed")
+
+        self.assertIn("default_bot_id", response["message"])
+        self.assertEqual(self.bases.sent(), [])
 
     def test_push_needs_the_token(self):
         self.register(DEFAULT_BOT_ID)

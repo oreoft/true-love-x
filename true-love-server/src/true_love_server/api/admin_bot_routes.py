@@ -41,7 +41,7 @@ async def _overview(bot: BotRecord) -> dict:
     upcoming += [task["next_run_time"] for task in task_service.list_tasks(bot.bot_id) if task["next_run_time"]]
     return {
         **bot.to_dict(),
-        "is_default": bot.bot_id == bot_registry.DEFAULT_BOT_ID,
+        "is_default": bot.bot_id == bot_registry.default_bot_id(),
         "status": status,
         "today_messages": today_messages,
         "listen_count": len(listen_store.list_all(bot.bot_id)) if bot.can("listen") else None,
@@ -54,7 +54,7 @@ async def list_bots():
     """所有登记过的机器人，按登记顺序；在线状态是现场问 base 的"""
     bots = bot_registry.list_all()
     cards = await asyncio.gather(*(_overview(bot) for bot in bots))
-    return ApiResponse(data={"bots": list(cards), "default_bot_id": bot_registry.DEFAULT_BOT_ID})
+    return ApiResponse(data={"bots": list(cards), "default_bot_id": bot_registry.default_bot_id()})
 
 
 @admin_bot_router.get("/{bot_id}")

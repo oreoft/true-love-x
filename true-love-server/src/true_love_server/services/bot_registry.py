@@ -15,13 +15,11 @@ from typing import Callable, Optional
 
 from true_love_common.bot import BotInfo
 
-from ..core import db_engine
+from ..core import Config, db_engine
 from ..models.bot import Bot
 
 LOG = logging.getLogger("BotRegistry")
 
-# 调用方没指定机器人时（外部 /send-msg、server 启停通知、AI 通知管理员）一律用真爱粉，和合并前的行为一致
-DEFAULT_BOT_ID = "wxid_ii1pon2s4t4h22"
 
 # 渠道专属功能：后台按它显示菜单，接口按它拒绝别的平台的机器人
 CAPABILITIES: dict[str, list[str]] = {
@@ -135,9 +133,17 @@ def get(bot_id: str) -> BotRecord:
         return _record(row)
 
 
+def default_bot_id() -> str:
+    """调用方没指定机器人时用的号：server 配置里的 default_bot_id，和合并前只有真爱粉时的行为一致"""
+    return Config().DEFAULT_BOT_ID
+
+
 def resolve(bot_id: Optional[str]) -> BotRecord:
-    """调用方给的机器人，没给时用 DEFAULT_BOT_ID。Raises: UnknownBot"""
-    return get(bot_id or DEFAULT_BOT_ID)
+    """调用方给的机器人，没给时用默认机器人。Raises: UnknownBot"""
+    bot_id = bot_id or default_bot_id()
+    if not bot_id:
+        raise UnknownBot("没有指定机器人，server 配置里也没有 default_bot_id")
+    return get(bot_id)
 
 
 def reset() -> None:

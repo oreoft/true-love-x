@@ -48,4 +48,6 @@ class Config:
             self.HTTP_TOKEN: dict = yconfig.get("http_token")
             self.HTTP = yconfig.get("http")
             self.ALAPI: dict = yconfig.get("alapi", {})
+            # 调用方没指定机器人时用哪个号（外部 /send-msg、server 启停通知、AI 通知管理员）
+            self.DEFAULT_BOT_ID: str = str(yconfig.get("default_bot_id") or "").strip()
             self.LOKI: dict = loki_config
