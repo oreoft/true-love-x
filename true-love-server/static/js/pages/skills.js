@@ -15,8 +15,13 @@ const HELP = `一行一个权限点，匹配上任意一行就能用：
 <span class="mono">wechat:号:昵称</span> 这个号里的这个人（号写 <span class="mono">*</span> 就是所有号） ·
 <span class="mono">wechat:号:群名:*</span> 只在这个群。号是 bot_id，人和群按微信里显示的昵称、群名写。`;
 
-const points = (list) => (list || []).map((p) => `<span class="mono">${esc(p)}</span>`).join('<br>') || '<span class="muted">—</span>';
+const points = (list) => (list || []).map((p) => `<span class="mono" style="white-space:nowrap">${esc(p)}</span>`).join('<br>') || '<span class="muted">—</span>';
 const isOpen = (list) => (list || []).includes('*:*');
+// 列表里只放一行预览，完整内容点「修改」看
+const clip = (text, max) => {
+    const flat = String(text || '').replace(/\s+/g, ' ').trim();
+    return flat.length > max ? `${flat.slice(0, max)}…` : flat;
+};
 const lines = (text) => text.split('\n').map((line) => line.trim()).filter(Boolean);
 
 let tab = 'builtin';
@@ -41,13 +46,14 @@ export async function show(root) {
             <button class="btn sm" id="defaults" style="margin-left:8px">修改</button></div>`;
     const installedTab = () => `
         ${installed.length ? `<div class="table-wrap"><table>
-            <thead><tr><th>ID</th><th>名称</th><th>命令</th><th>谁能用</th><th>调用</th><th>最近使用</th><th>操作</th></tr></thead>
+            <thead><tr style="white-space:nowrap"><th>ID</th><th>名称</th><th>命令</th><th>谁能用</th><th>使用</th><th>操作</th></tr></thead>
             <tbody>${installed.map((s, i) => `<tr>
-                <td class="mono">${esc(s.id)}</td>
-                <td>${esc(s.name)}<div class="muted wrap" style="font-size:12px">${esc(s.description)}</div></td>
-                <td class="mono wrap">${esc(s.command)}</td><td class="wrap">${points(s.permissions)}</td>
-                <td>${esc(s.usage_count ?? 0)}</td><td class="mono">${esc(shortTime(s.last_used_at))}</td>
-                <td><div class="actions"><button class="btn sm" data-edit="${i}">修改</button>
+                <td class="mono" style="white-space:nowrap">${esc(s.id)}</td>
+                <td style="min-width:140px">${esc(s.name)}<div class="muted" style="font-size:12px">${esc(clip(s.description, 24))}</div></td>
+                <td class="mono muted" title="${esc(s.command)}" style="white-space:nowrap">${esc(clip(s.command, 24))}</td>
+                <td class="wrap">${points(s.permissions)}</td>
+                <td style="white-space:nowrap">${esc(s.usage_count ?? 0)} 次<div class="muted mono" style="font-size:12px">${esc(shortTime(s.last_used_at))}</div></td>
+                <td><div class="actions" style="flex-wrap:nowrap"><button class="btn sm" data-edit="${i}">修改</button>
                     <button class="btn sm danger" data-delete="${i}">删除</button></div></td>
             </tr>`).join('')}</tbody></table></div>`
         : '<div class="empty">还没有安装的技能。在聊天里让机器人保存一段命令，或者点「添加技能」。</div>'}
