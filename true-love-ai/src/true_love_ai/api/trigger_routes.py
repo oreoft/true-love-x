@@ -20,7 +20,7 @@ async def trigger(request: dict, background_tasks: BackgroundTasks):
 
     Body:
         - token:    鉴权 token
-        - msg:      ChatMsg.to_dict() 格式，回复发往 msg.bot_id 这个机器人的 server
+        - msg:      ChatMsg.to_dict() 格式，回复以 msg.bot_id 这个机器人的身份发回 server
     """
     if not verify_token(request.get("token", "")):
         return APIResponse.token_error()
@@ -59,6 +59,6 @@ async def _send_fallback(msg: ChatMsg) -> None:
         if not receiver:
             return
         from true_love_ai.agent.server_client import send_text
-        await send_text(receiver, "啊哦~处理消息时出了点问题，稍后再试试捏~", at_user, platform=msg.platform)
+        await send_text(receiver, "啊哦~处理消息时出了点问题，稍后再试试捏~", at_user)
     except Exception as ex:
         LOG.error("发送兜底消息失败: %s", ex)

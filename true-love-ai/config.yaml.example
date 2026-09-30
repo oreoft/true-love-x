@@ -3,11 +3,6 @@
 
 # ==================== 服务基础配置 ====================
 
-# lark_host: the Lark base. WeChat base and server addresses live in true_love_common/hosts.py:
-#            AI replies through the server of the bot that received the message (msg.bot_id).
-base_server:
-  lark_host: ""
-
 http:
   host: "0.0.0.0"
   port: 8088

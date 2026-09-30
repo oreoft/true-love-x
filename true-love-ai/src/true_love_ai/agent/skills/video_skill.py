@@ -35,7 +35,6 @@ LOG = logging.getLogger("VideoSkill")
 async def generate_video(params: dict, ctx: dict) -> str:
     prompt = params.get("prompt", "")
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
 
     if not prompt:
         return "诶嘿~请告诉我你想要什么样的视频哦~"
@@ -47,7 +46,7 @@ async def generate_video(params: dict, ctx: dict) -> str:
         if result and result.video_id:
             from true_love_ai.agent.server_client import send_file
             from true_love_ai.services.video_service import GEN_VIDEO_DIR
-            ok = await send_file(receiver, f"{GEN_VIDEO_DIR.name}/{result.video_id}.mp4", platform=platform)
+            ok = await send_file(receiver, f"{GEN_VIDEO_DIR.name}/{result.video_id}.mp4")
             if ok:
                 return "好耶~视频已生成并发送！"
             LOG.error("generate_video: send_file 返回失败 video_id=%s", result.video_id)

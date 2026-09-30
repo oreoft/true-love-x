@@ -1,4 +1,4 @@
-"""When several bots share this AI, every reply goes back through the server of the bot that received the message."""
+"""Every bot shares one server; each reply names the bot that received the message, so it goes out from that account."""
 
 import asyncio
 import types
@@ -41,13 +41,13 @@ class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.agent = AnsweringAgent()
 
         async def post(url, payload, timeout=None):
-            self.posted.append((url, payload.get("receiver")))
+            self.posted.append((url, payload.get("bot_id"), payload.get("receiver")))
             return accepted(url)
 
         for patcher in (
             patch.object(server_client, "get_config", return_value=config),
             patch.object(server_client, "async_post_json", post),
-            patch.object(server_client, "server_host", lambda bot_id: f"http://{bot_id}-server:8088"),
+            patch.object(server_client, "server_host", lambda: "http://server.test:8089"),
             patch.object(trigger_routes, "verify_token", return_value=True),
             patch("true_love_ai.agent.skills.ensure_skills_loaded"),
             patch("true_love_ai.agent.agent_loop.get_agent_loop", side_effect=lambda: self.agent),
@@ -63,31 +63,31 @@ class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
         await tasks()
         return response
 
-    async def test_reply_goes_back_through_the_server_of_the_bot(self):
-        await self.trigger("alice", "win11-ser")
+    async def test_reply_names_the_bot_that_received_the_message(self):
+        await self.trigger("alice", "wxid_ser")
 
-        self.assertEqual(self.posted, [("http://win11-ser-server:8088/action/send", "alice")])
+        self.assertEqual(self.posted, [("http://server.test:8089/action/send", "wxid_ser", "alice")])
 
-    async def test_triggers_handled_at_the_same_time_keep_their_own_servers(self):
+    async def test_triggers_handled_at_the_same_time_keep_their_own_bots(self):
         await asyncio.gather(
-            asyncio.create_task(self.trigger("alice", "win10-m8s")),
-            asyncio.create_task(self.trigger("bob", "win11-ser")),
-            asyncio.create_task(self.trigger("carol", "gcp-win")),
+            asyncio.create_task(self.trigger("alice", "wxid_m8s")),
+            asyncio.create_task(self.trigger("bob", "wxid_ser")),
+            asyncio.create_task(self.trigger("carol", "lark_app")),
         )
 
         self.assertEqual(sorted(self.posted), [
-            ("http://gcp-win-server:8088/action/send", "carol"),
-            ("http://win10-m8s-server:8088/action/send", "alice"),
-            ("http://win11-ser-server:8088/action/send", "bob"),
+            ("http://server.test:8089/action/send", "lark_app", "carol"),
+            ("http://server.test:8089/action/send", "wxid_m8s", "alice"),
+            ("http://server.test:8089/action/send", "wxid_ser", "bob"),
         ])
 
-    async def test_failure_notice_also_goes_back_through_the_same_server(self):
+    async def test_failure_notice_also_names_the_same_bot(self):
         self.agent = CrashingAgent()
 
         with self.assertLogs("TriggerRoutes", level="ERROR"):
-            await self.trigger("alice", "win11-ser")
+            await self.trigger("alice", "wxid_ser")
 
-        self.assertEqual(self.posted, [("http://win11-ser-server:8088/action/send", "alice")])
+        self.assertEqual(self.posted, [("http://server.test:8089/action/send", "wxid_ser", "alice")])
 
 if __name__ == "__main__":
     unittest.main()

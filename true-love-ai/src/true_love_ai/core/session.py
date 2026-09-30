@@ -201,15 +201,16 @@ class SessionManager:
         self.prompts = config.llm.prompts if config.llm else {}
         self.user_prompt_map = config.llm.user_prompt_map if config.llm else {}
 
-    def _resolve_prompt(self, session_id: str) -> str:
+    def _resolve_prompt(self, prompt_key: str) -> str:
+        """prompt_key 是 "平台:群或人"，user_prompt_map 按它配置"""
         # 1. 精确匹配（最高优先级）：platform:id
-        prompt_name = self.user_prompt_map.get(session_id)
+        prompt_name = self.user_prompt_map.get(prompt_key)
         if prompt_name and prompt_name in self.prompts:
             return self.prompts[prompt_name]
 
         # 2. 平台通配符：platform:*
-        if ":" in session_id:
-            platform = session_id.split(":", 1)[0]
+        if ":" in prompt_key:
+            platform = prompt_key.split(":", 1)[0]
             wildcard_name = self.user_prompt_map.get(f"{platform}:*")
             if wildcard_name and wildcard_name in self.prompts:
                 return self.prompts[wildcard_name]
@@ -231,7 +232,15 @@ class SessionManager:
             self,
             session_id: str,
             user_ctx: Optional[str] = None,
+            prompt_key: Optional[str] = None,
     ) -> Session:
+        """
+        Args:
+            session_id: 会话 ID，"bot_id:群或人"
+            user_ctx: 发送者的画像，拼进 system prompt
+            prompt_key: 选 prompt 用的 "平台:群或人"，不给时用 session_id
+        """
+        prompt_key = prompt_key or session_id
         with self._lock:
             self._cleanup_expired()
 
@@ -245,7 +254,7 @@ class SessionManager:
             if session_id not in self._sessions:
                 self._sessions[session_id] = Session(
                     session_id=session_id,
-                    system_prompt=_build_prompt(self._resolve_prompt(session_id)),
+                    system_prompt=_build_prompt(self._resolve_prompt(prompt_key)),
                     ttl_seconds=self.ttl_seconds,
                     compress_threshold=self.compress_threshold,
                     compress_keep_recent=self.compress_keep_recent,
@@ -255,7 +264,7 @@ class SessionManager:
             else:
                 if user_ctx:
                     session = self._sessions[session_id]
-                    session.system_prompt = _build_prompt(self._resolve_prompt(session_id))
+                    session.system_prompt = _build_prompt(self._resolve_prompt(prompt_key))
 
             return self._sessions[session_id]
 

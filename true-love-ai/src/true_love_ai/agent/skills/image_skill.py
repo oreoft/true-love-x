@@ -46,7 +46,6 @@ async def generate_image(params: dict, ctx: dict) -> str:
     prompt = params.get("prompt", "")
     provider = params.get("provider")
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
 
     if not prompt:
         return "诶嘿~请告诉我你想要什么样的图片哦~"
@@ -62,7 +61,7 @@ async def generate_image(params: dict, ctx: dict) -> str:
         if result and result.img:
             filename = f"{uuid.uuid4().hex}.jpg"
             (GEN_IMG_DIR / filename).write_bytes(base64.b64decode(result.img))
-            ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}", platform=platform)
+            ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}")
             if ok:
                 return "好耶~图片已生成并发送！"
             LOG.error("generate_image: send_file 返回失败 filename=%s", filename)
@@ -107,7 +106,6 @@ async def generate_image(params: dict, ctx: dict) -> str:
 async def analyze_image(params: dict, ctx: dict) -> str:
     question = params.get("question", "请分析这张图片")
     image_path = params.get("image_path", "")
-    platform = ctx.get("platform", "wechat")
 
     if not image_path:
         return "诶嘿~请提供图片路径哦~"
@@ -115,7 +113,7 @@ async def analyze_image(params: dict, ctx: dict) -> str:
     try:
         import base64
         from true_love_ai.agent.server_client import fetch_media_bytes
-        data = await fetch_media_bytes(image_path, platform=platform)
+        data = await fetch_media_bytes(image_path)
         if not data:
             return "呜呜~图片获取失败了捏，可能文件不存在~"
         img_data = base64.b64encode(data).decode()
@@ -165,7 +163,6 @@ async def edit_image(params: dict, ctx: dict) -> str:
     image_path = params.get("image_path", "")
     prompt = params.get("prompt", "")
     receiver = ctx.get("receiver", "")
-    platform = ctx.get("platform", "wechat")
 
     if not image_path or not prompt:
         return "诶嘿~请提供图片路径和修改要求哦~"
@@ -178,7 +175,7 @@ async def edit_image(params: dict, ctx: dict) -> str:
         from true_love_ai.llm.router import get_openai_client
         from true_love_ai.services.image_service import GEN_IMG_DIR
 
-        data = await fetch_media_bytes(image_path, platform=platform)
+        data = await fetch_media_bytes(image_path)
         if not data:
             return "呜呜~图片获取失败了捏，可能文件不存在~"
         model = get_model_registry().get("image_edit", "default")
@@ -206,7 +203,7 @@ async def edit_image(params: dict, ctx: dict) -> str:
 
         filename = f"{uuid.uuid4().hex}.jpg"
         (GEN_IMG_DIR / filename).write_bytes(img_bytes)
-        ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}", platform=platform)
+        ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}")
         if ok:
             return "好耶~图片已生成并发送！"
         LOG.error("edit_image: send_file 返回失败 filename=%s", filename)

@@ -49,31 +49,34 @@ class AgentLoop:
 
     async def run(self, msg: ChatMsg) -> None:
         platform = msg.platform
+        bot_id = msg.bot_id
         sender_id = msg.sender_id
         sender_name = msg.sender_name or sender_id
         chat_id = msg.chat_id
         is_group = msg.is_group
         msg_type = msg.msg_type
 
-        # session key 加 platform 前缀，天然隔离多平台
+        # 会话按机器人隔离：同名的群在不同的号里是不同的会话；用户画像跟着会话走（每个群一份、私聊一份）
         _session_base = chat_id if is_group else sender_id
-        session_id = f"{platform}:{_session_base}"
+        session_id = f"{bot_id}:{_session_base}"
+        # prompt 映射仍按"平台:群或人"配置
+        prompt_key = f"{platform}:{_session_base}"
         at_user = sender_id if is_group else ""
         receiver = chat_id if is_group else sender_id
 
-        LOG.info("AgentLoop.run: platform=%s sender_id=%s sender_name=%s session=%s type=%s",
-                 platform, sender_id, sender_name, session_id, msg_type)
+        LOG.info("AgentLoop.run: bot_id=%s platform=%s sender_id=%s sender_name=%s session=%s type=%s",
+                 bot_id, platform, sender_id, sender_name, session_id, msg_type)
 
         # 构建用户侧消息内容
         user_content = self._build_user_content(msg)
         if not user_content:
             LOG.warning("无法解析消息内容，跳过: type=%s", msg_type)
-            await self._send_reply(receiver, "抱歉，这种消息我暂时还不太看得懂呢~", at_user, platform=platform)
+            await self._send_reply(receiver, "抱歉，这种消息我暂时还不太看得懂呢~", at_user)
             return
 
         # 获取用户画像并注入 session
         user_ctx = get_user_context(session_id, sender_id)
-        session = self.session_manager.get_or_create(session_id, user_ctx=user_ctx)
+        session = self.session_manager.get_or_create(session_id, user_ctx=user_ctx, prompt_key=prompt_key)
         session.add_message("user", user_content)
 
         # 获取当前用户有权限使用的 tools
@@ -121,7 +124,8 @@ class AgentLoop:
 
             # 2. 并行执行所有 tool，把结果追加到 messages
             tool_results = await asyncio.gather(*[
-                self._execute_tool(tc, session_id, sender_id, sender_name, is_group, receiver, at_user, platform)
+                self._execute_tool(tc, session_id, sender_id, sender_name, is_group, receiver, at_user, platform,
+                                   bot_id)
                 for tc in tool_calls
             ])
             for tc, tool_result in zip(tool_calls, tool_results):
@@ -137,7 +141,7 @@ class AgentLoop:
 
         if reply:
             session.add_message("assistant", reply)
-            await self._send_reply(receiver, reply, at_user, platform=platform)
+            await self._send_reply(receiver, reply, at_user)
 
     def _build_user_content(self, msg: ChatMsg) -> Optional[str]:
         """把各类消息类型转换为 LLM 可理解的文本"""
@@ -216,6 +220,7 @@ class AgentLoop:
             receiver: str,
             at_user: str,
             platform: str,
+            bot_id: str,
     ) -> str:
         """执行单个 tool，返回结果字符串"""
         name = tool_call["name"]
@@ -230,6 +235,7 @@ class AgentLoop:
             "receiver": receiver,
             "at_user": at_user,
             "platform": platform,
+            "bot_id": bot_id,
         }
 
         try:
@@ -238,7 +244,7 @@ class AgentLoop:
                 import random
                 from true_love_ai.agent.server_client import send_text
                 msg = random.choice(notify_msg) if isinstance(notify_msg, list) else notify_msg
-                await send_text(receiver, msg, at_user, platform=platform)
+                await send_text(receiver, msg, at_user)
 
             result = await asyncio.wait_for(
                 skill_registry.execute(name, args, ctx),
@@ -256,14 +262,13 @@ class AgentLoop:
             LOG.exception("tool %s 执行异常: %s", name, e)
             return f"[执行失败] {e}"
 
-    async def _send_reply(self, receiver: str, content: str, at_user: str,
-                          platform: str = "wechat") -> None:
+    async def _send_reply(self, receiver: str, content: str, at_user: str) -> None:
         """通过 Server 发送最终回复"""
         from true_love_ai.agent.server_client import send_text
         try:
-            ok = await send_text(receiver, content, at_user, platform=platform)
+            ok = await send_text(receiver, content, at_user)
             if not ok:
-                LOG.error("发送回复失败: receiver=%s platform=%s", receiver, platform)
+                LOG.error("发送回复失败: receiver=%s", receiver)
         except Exception as e:
             LOG.exception("发送回复异常: %s", e)
 

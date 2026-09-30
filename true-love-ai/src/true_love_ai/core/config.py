@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from .config_llm import LLMConfig
 from .config_http import HTTPConfig, SessionConfig
-from .config_services import PlatformKeyConfig, BaseServerConfig, NexuConfig
+from .config_services import PlatformKeyConfig, NexuConfig
 from true_love_common.observability.logging import LoggingConfig
 
 LOG = logging.getLogger(__name__)
@@ -33,7 +33,6 @@ class Config(BaseSettings):
     http: Optional[HTTPConfig] = None
     session: SessionConfig = SessionConfig()
     platform_key: PlatformKeyConfig = PlatformKeyConfig()
-    base_server: BaseServerConfig = BaseServerConfig()
     nexu: NexuConfig = NexuConfig()
 
     @classmethod
@@ -83,7 +82,6 @@ __all__ = [
     "HTTPConfig",
     "SessionConfig",
     "PlatformKeyConfig",
-    "BaseServerConfig",
     "NexuConfig",
     "get_config",
     "reload_config",

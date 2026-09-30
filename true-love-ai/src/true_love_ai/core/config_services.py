@@ -9,13 +9,6 @@ class PlatformKeyConfig(BaseSettings):
     litellm_base_url: str = ""
 
 
-class BaseServerConfig(BaseSettings):
-    """飞书 base 地址；微信 base、server 的地址登记在 true_love_common.hosts"""
-    model_config = SettingsConfigDict(extra="ignore")
-
-    lark_host: str = ""
-
-
 class NexuConfig(BaseSettings):
     """Nexu 服务配置"""
     model_config = SettingsConfigDict(extra="ignore")

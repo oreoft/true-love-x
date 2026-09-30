@@ -25,16 +25,17 @@ class MasterNoticeTests(unittest.TestCase):
         for patcher in (
             patch.object(server_client, "get_config", return_value=config),
             patch.object(server_client, "post_json", self.post),
-            patch.object(server_client, "server_host", lambda bot_id: f"http://{bot_id}-server:8088"),
+            patch.object(server_client, "server_host", lambda: "http://server.test:8089"),
         ):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def test_start_notice_asks_the_server_to_reach_the_master(self):
+    def test_start_notice_asks_the_server_to_reach_the_master_of_the_default_bot(self):
         main.notice_master()
 
         url, payload = self.post.call_args.args[:2]
-        self.assertEqual(url, f"http://{server_client.AI_NOTICE_BOT}-server:8088/action/send")
+        self.assertEqual(url, "http://server.test:8089/action/send")
+        # no bot_id: the server sends it from its default bot, as before
         self.assertEqual(payload, {"is_master": True, "content": "真爱粉 AI 启动成功啦~ ✨", "token": "token"})
 
     def test_ai_still_starts_when_the_notice_cannot_be_sent(self):

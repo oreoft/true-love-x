@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-Skill Routes - 动态技能管理接口
+Admin Routes - AI 的管理接口（/admin/*）
 
-供 Server Admin 调用，管理 DynamicSkill 数据。
-所有端点使用 POST，token 放在请求体中。
+tl-admin 的请求经 server 转发过来，目前只有动态技能管理。
+所有端点使用 POST，token 放在请求体中。给 server 的业务接口在 trigger_routes、data_routes。
 """
 import logging
 
@@ -13,21 +13,21 @@ from true_love_ai.api.deps import verify_token
 from true_love_ai.memory import dynamic_skill_service as _ss
 from true_love_ai.models.response import APIResponse
 
-LOG = logging.getLogger("SkillRoutes")
+LOG = logging.getLogger("AdminRoutes")
 
-skill_router = APIRouter(prefix="/skill")
+admin_router = APIRouter(prefix="/admin")
 
 
-@skill_router.post("/list")
+@admin_router.post("/skill/list")
 async def list_skills(request: dict):
     if not verify_token(request.get("token", "")):
         return APIResponse.token_error()
     data = _ss.list_skills()
-    LOG.info("skill/list: count=%d", len(data))
+    LOG.info("admin/skill/list: count=%d", len(data))
     return APIResponse.success({"skills": data, "total": len(data)})
 
 
-@skill_router.post("/save")
+@admin_router.post("/skill/save")
 async def save_skill(request: dict):
     if not verify_token(request.get("token", "")):
         return APIResponse.token_error()
@@ -46,11 +46,11 @@ async def save_skill(request: dict):
     except (ValueError, RuntimeError) as e:
         return APIResponse.error(str(e))
 
-    LOG.info("skill/save: id=%s", result["id"])
+    LOG.info("admin/skill/save: id=%s", result["id"])
     return APIResponse.success({"id": result["id"]})
 
 
-@skill_router.post("/delete")
+@admin_router.post("/skill/delete")
 async def delete_skill(request: dict):
     if not verify_token(request.get("token", "")):
         return APIResponse.token_error()
@@ -59,5 +59,5 @@ async def delete_skill(request: dict):
         result = _ss.delete_skill(skill_id)
     except ValueError as e:
         return APIResponse.error(str(e))
-    LOG.info("skill/delete: id=%s", skill_id)
+    LOG.info("admin/skill/delete: id=%s", skill_id)
     return APIResponse.success(result)
