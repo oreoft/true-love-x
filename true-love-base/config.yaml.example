@@ -1,21 +1,24 @@
 # True Love Base Configuration
 # Copy this file to config.yaml and modify as needed
 
-# This file is shared by every machine that runs base. The only per-machine entry is the master:
-# the nickname that gets startup/shutdown notices, and everything sent with is_master.
-# Keys are Windows machine names (any letter case); a machine that is not listed has no master.
-master_wix:
-  win10-m8s: "your_friend_nickname"
-  another-machine: "another_nickname"
+# This file is shared by every base. Each base runs one bot (one WeChat account); the deploy injects
+# its wxid as the BOT_ID environment variable, and base reads its own entry from this map.
+# Base refuses to start when BOT_ID is missing from the map, and does not take over a WeChat
+# that is logged in to any other account.
+# master: the nickname that gets startup/shutdown notices, and everything sent with is_master.
+bots:
+  wxid_your_bot_wxid:
+    master: "your_friend_nickname"
 
 # HTTP token for authentication with backend server
 http_token: "your_secret_token"
 
-# Service addresses are not configured here: they live in true_love_common/hosts.py, keyed by machine name.
+# The server address lives in true_love_common/hosts.py. Base reports its own tailnet address
+# to the server on every call, so the server knows where to call it back.
 
-# Chat listeners are kept in the server's database. When WeChat connects, base fetches
-# them from this machine's server, retrying for a few minutes; the server restores them after it starts.
-# Add or remove listeners from the server admin console (POST /admin/listen/add on the server).
+# Chat listeners are kept in the server's database, per bot. When WeChat connects, base fetches
+# them from the server, retrying for a few minutes; the server restores them after it starts.
+# Add or remove listeners from tl-admin on the server.
 
 # Loki log shipping (optional). Leave enable: false to log to the console only.
 loki:

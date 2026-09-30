@@ -11,11 +11,15 @@ import signal
 import sys
 from threading import Event
 
+from true_love_common.wechat_account import current_wxid
+
 from true_love_base.api import server
 from true_love_base.configuration import Config
 from true_love_base.core import WxAutoClient
+from true_love_base.services import server_client
 from true_love_base.services.robot import Robot
 from true_love_base.services.wx_supervisor import WxSupervisor
+from true_love_base.utils.tailnet import tailnet_ip
 from true_love_base.utils.win_env import display_scale_percent, keep_awake
 
 # 初始化配置（会设置日志）
@@ -62,6 +66,13 @@ def main():
     LOG.info("True Love Base starting...")
     LOG.info("=" * 50)
 
+    # server 只通过 tailnet 回调 base，连不上 tailnet 就不启动
+    try:
+        config.callback = f"http://{tailnet_ip()}:{server.HTTP_PORT}"
+    except RuntimeError as e:
+        raise SystemExit(f"Cannot start without a tailnet address: {e}")
+    LOG.info("Bot [%s] reports callback %s to the server", config.bot_id, config.callback)
+
     # 初始化微信客户端和机器人（不连接微信）
     client, robot = init_wx()
 
@@ -77,7 +88,7 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     if not robot.master:
-        LOG.warning(f"Machine [{config.machine_name}] has no master, startup and shutdown are not announced")
+        LOG.warning(f"Bot [{config.bot_id}] has no master, startup and shutdown are not announced")
 
     # 是否已经向 master 报告过启动成功
     announced = False
@@ -169,7 +180,9 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
 
 def init_wx() -> tuple[WxAutoClient, Robot]:
     # 初始化微信客户端；连接微信由 WxSupervisor 负责，微信没开也不影响 base 启动
-    client = WxAutoClient(bot_id=config.machine_name)
+    # 连接时核对登录的号，不是部署时指定的那个就不接管
+    client = WxAutoClient(bot_id=config.bot_id, account_of=current_wxid)
+    server_client.use_self_name(client.get_self_name)
 
     # 初始化机器人；监听列表在连上微信后向 server 取
     robot = Robot(client, master=config.master_wix)

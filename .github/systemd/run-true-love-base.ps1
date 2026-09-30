@@ -9,6 +9,7 @@ $WorkDir = Join-Path $RepoRoot "true-love-base"
 $ConfigRepo = Join-Path (Split-Path $RepoRoot -Parent) "config-center"
 $ConfigFile = Join-Path $ConfigRepo "true-love-n\true-love-base\config.yaml"
 $ConfigLink = Join-Path $WorkDir "config.yaml"
+$BotIdFile = Join-Path $ConfigRepo "true-love-n\true-love-base\bot_id"
 
 Set-Location $WorkDir
 Write-Host "Starting true-love-base at $(Get-Date)" -ForegroundColor Cyan
@@ -23,6 +24,14 @@ if (-not (Test-Path $ConfigFile)) {
     Write-Host "Config not found: $ConfigFile (run the true-love-base deploy workflow to upload it)" -ForegroundColor Red
     exit 1
 }
+
+if (-not (Test-Path $BotIdFile)) {
+    Write-Host "Bot id not found: $BotIdFile (run the true-love-base deploy workflow to write it)" -ForegroundColor Red
+    exit 1
+}
+# The bot this base runs; base reads its own entry of config.yaml by it and checks the logged-in account
+$env:BOT_ID = (Get-Content -Raw $BotIdFile).Trim()
+Write-Host "Bot    : $env:BOT_ID" -ForegroundColor Gray
 
 # config-center is the only source of truth: replace whatever is there (old link, even a dangling one, or a stray file)
 [System.IO.File]::Delete($ConfigLink)

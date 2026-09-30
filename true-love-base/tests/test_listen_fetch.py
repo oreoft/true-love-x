@@ -46,14 +46,13 @@ class ListenFetchTests(unittest.TestCase):
         dependencies = {
             "httpx": module("httpx", Client=Mock()),
             "true_love_common.chat_msg": module("true_love_common.chat_msg", ChatMsg=object),
-            "true_love_common.hosts": module(
-                "true_love_common.hosts",
-                bot_hosts=lambda bot_id: types.SimpleNamespace(server=f"http://{bot_id}-server:8088")),
+            "true_love_common.hosts": module("true_love_common.hosts", SERVER_HOST="http://server.test:8089"),
             "true_love_common.http.client": module(
                 "true_love_common.http.client", post=Mock(), post_json=self.post_json),
             "true_love_base.configuration": module(
                 "true_love_base.configuration",
-                Config=lambda: types.SimpleNamespace(machine_name="win10-m8s", http_token="token")),
+                Config=lambda: types.SimpleNamespace(
+                    bot_id="wxid_m8s", callback="http://100.64.0.8:5000", http_token="token")),
             "true_love_base.models.api": module(
                 "true_love_base.models.api", ChatRequest=Mock(), ChatResponse=Mock()),
         }
@@ -68,14 +67,18 @@ class ListenFetchTests(unittest.TestCase):
         clock.start()
         self.addCleanup(clock.stop)
 
-    def test_list_is_fetched_from_the_server_with_the_token(self):
+    def test_list_is_fetched_for_this_bot_with_the_token(self):
         self.post_json.return_value = reply({"code": 0, "data": {"chats": ["群A", "好友B"]}})
+        self.client.use_self_name(lambda: "真爱粉")
 
         self.assertEqual(self.client.fetch_listen_chats(self.clock), ["群A", "好友B"])
 
         url, payload = self.post_json.call_args.args
-        self.assertEqual(url, "http://win10-m8s-server:8088/listen/list")
-        self.assertEqual(payload, {"token": "token"})
+        self.assertEqual(url, "http://server.test:8089/base/listen/list")
+        self.assertEqual(payload, {
+            "token": "token",
+            "bot": {"bot_id": "wxid_m8s", "platform": "wechat", "callback": "http://100.64.0.8:5000", "name": "真爱粉"},
+        })
 
     def test_retries_with_growing_delays_until_the_server_answers(self):
         self.post_json.side_effect = [reply(ok=False)] * 3 + [reply({"code": 0, "data": {"chats": ["群A"]}})]

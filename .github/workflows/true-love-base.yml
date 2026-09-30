@@ -14,6 +14,8 @@ env:
   SERVER_PORT: 2233
   SERVER_USER: admin
   SERVER_SSH_KEY: ${{ secrets.M8S_SSH_DOOR_KEY }}
+  # The bot this machine runs: the wxid of the WeChat account logged in there (真爱粉)
+  BOT_ID: wxid_ii1pon2s4t4h22
 
 permissions:
   contents: read
@@ -74,6 +76,8 @@ jobs:
             $configDir = Join-Path ([Environment]::GetFolderPath('Desktop')) 'config-center\true-love-n\true-love-base'
             New-Item -ItemType Directory -Force -Path $configDir | Out-Null
             Move-Item -Force -Path (Join-Path $HOME '.tl-config-true-love-base.yaml') -Destination (Join-Path $configDir 'config.yaml')
+            # The runner reads the bot id from this file into BOT_ID
+            Set-Content -NoNewline -Encoding ascii -Path (Join-Path $configDir 'bot_id') -Value '${{ env.BOT_ID }}'
 
             # Pull before stopping anything: if it fails, base keeps running; the task is also (re)registered from these scripts
             git -C $repoRoot pull --ff-only

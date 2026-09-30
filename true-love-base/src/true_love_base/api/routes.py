@@ -55,7 +55,7 @@ async def status() -> dict[str, Any]:
 
     Response:
         - data: {"wx_online": 微信是否在线, "self_name": 当前登录的昵称, "since": 进入当前状态的时间,
-                  "bot_id": 这个机器人的标识（机器名）}
+                  "bot_id": 这个机器人的标识（wxid）}
     """
     robot = _get_robot()
     if robot is None:
@@ -70,7 +70,7 @@ async def send_text(request: dict[str, Any] | None = Body(default=None)) -> dict
 
     Request Body:
         - sendReceiver: 接收者
-        - is_master: 为 true 时发给这台机器的管理员，忽略 sendReceiver（可选）
+        - is_master: 为 true 时发给这个号的管理员，忽略 sendReceiver（可选）
         - content: 消息内容
         - atReceiver: 要@的人（可选）
 
@@ -105,7 +105,7 @@ async def send_file(request: dict[str, Any] | None = Body(default=None)) -> dict
 
     Request Body:
         - sendReceiver: 接收者
-        - is_master: 为 true 时发给这台机器的管理员，忽略 sendReceiver（可选）
+        - is_master: 为 true 时发给这个号的管理员，忽略 sendReceiver（可选）
         - url: 文件的下载地址，base 先下载到 send-files/ 再发送
     """
     robot = _get_robot()
@@ -292,7 +292,7 @@ def _unavailable(robot: Optional["Robot"]) -> Optional[dict[str, Any]]:
 
 
 def _receiver(robot: "Robot", data: dict[str, Any]) -> str:
-    """消息发给谁：指明发给管理员时用这台机器的管理员，否则用请求里的接收者"""
+    """消息发给谁：指明发给管理员时用这个号的管理员，否则用请求里的接收者"""
     return robot.master if data.get("is_master") else data.get("sendReceiver", "")
 
 
