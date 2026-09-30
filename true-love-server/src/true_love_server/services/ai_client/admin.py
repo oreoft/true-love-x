@@ -19,7 +19,8 @@ LOG = logging.getLogger("AiAdminClient")
 
 async def _call(path: str, payload: dict, action: str) -> dict:
     """调 AI 的管理接口，返回 data；失败时抛带 AI 文案的 RuntimeError"""
-    result = await async_post_json(f"{ai_host()}{path}", {"token": _token(), **payload}, timeout=10.0)
+    # 后台页面的请求不记日志（server 收到的 /admin 请求也不记），只有出错时记
+    result = await async_post_json(f"{ai_host()}{path}", {"token": _token(), **payload}, timeout=10.0, quiet=True)
     if not result.ok:
         raise RuntimeError(f"{action}失败: {result.error or result.text}")
     data = result.data or {}

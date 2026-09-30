@@ -50,12 +50,15 @@ def request(
     headers: dict[str, str] | None = None,
     timeout: Any = None,
     client: httpx.Client | None = None,
+    quiet: bool = False,
     **kwargs: Any,
 ) -> HttpResult:
+    """quiet=True 时只在出错时记日志（后台管理这类高频、没排查价值的调用）"""
     method = method.upper()
     merged_headers = trace_headers(headers)
     httpx_timeout = _normalize_timeout(timeout)
-    _log_start(method, url, kwargs)
+    if not quiet:
+        _log_start(method, url, kwargs)
     start = time.perf_counter()
     try:
         if client is not None:
@@ -63,7 +66,7 @@ def request(
         else:
             with httpx.Client(timeout=httpx_timeout) as active_client:
                 response = active_client.request(method, url, headers=merged_headers, **kwargs)
-        return _ok_result(method, url, response, start)
+        return _ok_result(method, url, response, start, quiet)
     except Exception as exc:
         return _error_result(method, url, exc, start)
 
@@ -86,17 +89,20 @@ async def async_request(
     *,
     headers: dict[str, str] | None = None,
     timeout: Any = None,
+    quiet: bool = False,
     **kwargs: Any,
 ) -> HttpResult:
+    """quiet=True 时只在出错时记日志"""
     method = method.upper()
     merged_headers = trace_headers(headers)
     httpx_timeout = _normalize_timeout(timeout)
-    _log_start(method, url, kwargs)
+    if not quiet:
+        _log_start(method, url, kwargs)
     start = time.perf_counter()
     try:
         async with httpx.AsyncClient(timeout=httpx_timeout) as client:
             response = await client.request(method, url, headers=merged_headers, **kwargs)
-        return _ok_result(method, url, response, start)
+        return _ok_result(method, url, response, start, quiet)
     except Exception as exc:
         return _error_result(method, url, exc, start)
 
@@ -113,9 +119,10 @@ async def async_post_json(url: str, payload: dict[str, Any], **kwargs: Any) -> H
     return await async_post(url, json=payload, **kwargs)
 
 
-def _ok_result(method: str, url: str, response: Any, start: float) -> HttpResult:
+def _ok_result(method: str, url: str, response: Any, start: float, quiet: bool = False) -> HttpResult:
     result = _result_from_httpx_response(method, url, response, (time.perf_counter() - start) * 1000)
-    _log_end(result)
+    if not quiet:
+        _log_end(result)
     return result
 
 

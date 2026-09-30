@@ -135,6 +135,8 @@ class LoggingConfig:
 
         for handler in handlers:
             root_logger.addHandler(handler)
+        # httpx 每个请求都打一行 "HTTP Request: ..."，和 http.client 的 HTTP OUT 日志重复
+        logging.getLogger("httpx").setLevel(logging.WARNING)
 
         cls._initialized = True
         logging.getLogger("LoggingConfig").info(

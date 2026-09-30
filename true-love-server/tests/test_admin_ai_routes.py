@@ -13,7 +13,7 @@ class AdminAiRoutesTests(ServerCase):
         self.forwarded = []
         self.ai_reply = {"code": 0, "data": {"ok": True}}
 
-        async def post(url, payload, timeout=None):
+        async def post(url, payload, **kwargs):
             self.forwarded.append((url.rsplit("/admin", 1)[1], {k: v for k, v in payload.items() if k != "token"}))
             return http_result(url, self.ai_reply)
 
