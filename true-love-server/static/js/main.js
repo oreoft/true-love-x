@@ -115,13 +115,18 @@ async function render() {
     renderSwitcher();
     renderNav();
     const module = page === 'overview' ? overview : (BOT_PAGES[page] || PLATFORM_PAGES[page]).module;
-    const main = $('#main');
-    main.innerHTML = '<div class="loader">加载中…</div>';
+    // 每次渲染一个新的容器：接口慢的时候切走了，旧页面晚到的结果只会写进已经换下来的容器，不会盖住新页面
+    const pageRoot = document.createElement('div');
+    pageRoot.className = 'page';
+    pageRoot.innerHTML = '<div class="loader">加载中…</div>';
+    $('#main').replaceChildren(pageRoot);
     const ctx = { bot, bots: state.bots, go, refreshBots, isOnline, selectBot };
     try {
-        state.cleanup = (await module.show(main, ctx)) || null;
+        const cleanup = (await module.show(pageRoot, ctx)) || null;
+        if (pageRoot.isConnected) state.cleanup = cleanup;
+        else if (cleanup) cleanup();
     } catch (e) {
-        main.innerHTML = `<div class="banner">${esc(e.message)}</div>`;
+        pageRoot.innerHTML = `<div class="banner">${esc(e.message)}</div>`;
     }
 }
 
