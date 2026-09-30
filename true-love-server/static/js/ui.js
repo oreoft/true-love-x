@@ -33,6 +33,21 @@ export async function attempt(action, success) {
     }
 }
 
+/** 点了要等一会的按钮：执行期间按钮变灰、文字换成 label，结束后恢复；返回 action 的结果 */
+export async function busy(button, label, action) {
+    const text = button.textContent;
+    button.disabled = true;
+    button.textContent = label;
+    try {
+        return await action();
+    } finally {
+        if (button.isConnected) {
+            button.disabled = false;
+            button.textContent = text;
+        }
+    }
+}
+
 export function modal(html) {
     $('#modalRoot').innerHTML = `<div class="modal-back" id="modalBack"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
     $('#modalBack').addEventListener('click', (e) => {

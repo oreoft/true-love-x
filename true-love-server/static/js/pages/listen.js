@@ -5,7 +5,7 @@
  */
 
 import { botApi } from '../api.js';
-import { $, $$, attempt, closeModal, confirmModal, esc, modal, toast } from '../ui.js';
+import { $, $$, attempt, busy, closeModal, confirmModal, esc, modal, toast } from '../ui.js';
 import { offlineBanner } from './schedule.js';
 
 const REASONS = { window_not_found: '窗口丢失', get_windows_failed: '取不到窗口', chat_info_failed: '窗口无响应' };
@@ -23,7 +23,16 @@ export async function show(root, ctx) {
         statusError = e.message;
     }
     const { listeners, summary } = status;
-    const reload = () => show(root, ctx);
+    const reload = async () => {
+        root.style.opacity = '0.5';
+        root.style.pointerEvents = 'none';
+        try {
+            await show(root, ctx);
+        } finally {
+            root.style.opacity = '';
+            root.style.pointerEvents = '';
+        }
+    };
 
     root.innerHTML = `
         ${online ? '' : offlineBanner(bot)}
@@ -46,37 +55,36 @@ export async function show(root, ctx) {
             <button class="add" id="add" ${disabled}>＋ 添加监听</button>
         </div>`;
 
+    // 操作都要等 base 去微信里点，期间按钮显示"…中"、点不了；做完重新拉状态时页面变灰
     $('#refresh', root).onclick = async (e) => {
-        e.target.disabled = true;
-        const result = await attempt(() => api.listenRefresh());
+        const result = await busy(e.target, '刷新中…', () => attempt(() => api.listenRefresh()));
         if (result) toast(`已刷新：${result.success_count}/${result.total} 正常`);
         reload();
     };
-    $('#resetAll', root).onclick = () => confirmModal('重置全部监听？',
+    $('#resetAll', root).onclick = (e) => confirmModal('重置全部监听？',
         '会关掉所有子窗口再逐个重新监听，期间可能漏收几秒消息。', async () => {
-            const result = await attempt(() => api.listenResetAll());
+            const result = await busy(e.target, '重置中…', () => attempt(() => api.listenResetAll()));
             if (result) toast(result.message);
             reload();
         }, '重置');
     $$('[data-probe]', root).forEach((el) => {
         const chat = listeners[el.dataset.probe].chat;
         el.onclick = async () => {
-            const result = await attempt(() => api.listenProbe(chat));
+            const result = await busy(el, '测活中…', () => attempt(() => api.listenProbe(chat)));
             if (result) toast(`${chat} 能取到 ${(result.data || []).length} 条消息`);
         };
     });
     $$('[data-reset]', root).forEach((el) => {
         const chat = listeners[el.dataset.reset].chat;
         el.onclick = async () => {
-            el.disabled = true;
-            await attempt(() => api.listenReset(chat), `${chat} 已重置`);
+            await busy(el, '重置中…', () => attempt(() => api.listenReset(chat), `${chat} 已重置`));
             reload();
         };
     });
     $$('[data-remove]', root).forEach((el) => {
         const chat = listeners[el.dataset.remove].chat;
         el.onclick = () => confirmModal('移除这个监听？', `移除后不再收「${chat}」的消息。`, async () => {
-            await attempt(() => api.listenRemove(chat), `${chat} 已移除`);
+            await busy(el, '移除中…', () => attempt(() => api.listenRemove(chat), `${chat} 已移除`));
             reload();
         }, '移除');
     });
@@ -87,9 +95,7 @@ export async function show(root, ctx) {
         $('#save').onclick = async (e) => {
             const name = $('#fName').value.trim();
             if (!name) { toast('名称不能为空', 'error'); return; }
-            e.target.disabled = true;
-            const done = await attempt(() => api.listenAdd(name), `${name} 已添加`);
-            e.target.disabled = false;
+            const done = await busy(e.target, '添加中…', () => attempt(() => api.listenAdd(name), `${name} 已添加`));
             if (done !== undefined) { closeModal(); reload(); }
         };
     };
