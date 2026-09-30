@@ -4,6 +4,7 @@ Admin AI Routes - tl-admin 里存在 AI 那边的设置，原样转发给 AI 的
 
 - /admin/skill/*：技能（内置的和安装的）和它们的权限点，所有机器人共用
 - /admin/bots/{bot_id}/personas*：人设（system prompt 和语音风格）
+- /admin/bots/{bot_id}/memory：一个群或私聊里某个人的画像（只读）
 - /admin/models*：模型，所有机器人共用
 人设按机器人存；请求里带 all_bots=true 时改的是所有机器人共用的那份（AI 那边的 bot_id 是 "*"）。
 """
@@ -84,6 +85,14 @@ async def save_default_permissions(request: dict):
     data = await _forward(ai_admin.save_default_permissions, request.get("permissions"))
     LOG.info("admin/skill/default-permissions/save: %s", request.get("permissions"))
     return ApiResponse(data=data)
+
+
+# ==================== 画像 ====================
+
+@admin_ai_router.get("/bots/{bot_id}/memory")
+async def get_memory(bot_id: str, chat_id: str, sender: str):
+    """这个机器人里一个群或私聊中，某个人的画像（只读，一次一个人）"""
+    return ApiResponse(data=await _forward(ai_admin.get_memory, deps.bot(bot_id).bot_id, chat_id, sender))
 
 
 # ==================== 人设 ====================

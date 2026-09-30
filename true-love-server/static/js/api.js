@@ -64,6 +64,7 @@ export function botApi(botId) {
         taskDelete: (taskId) => post(`${base}/tasks/delete`, { task_id: taskId }),
         taskRun: (taskId) => post(`${base}/tasks/run`, { task_id: taskId }),
 
+        memory: (chatId, sender) => request(`${base}/memory${query({ chat_id: chatId, sender })}`),
         personas: () => request(`${base}/personas`),
         personaSave: (persona) => post(`${base}/personas/save`, persona),
         personaDelete: (persona) => post(`${base}/personas/delete`, persona),

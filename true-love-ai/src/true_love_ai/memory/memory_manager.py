@@ -69,6 +69,11 @@ def list_user_memory(group_id: str, sender_id: str) -> list[dict]:
         return []
 
 
+def describe_user_memory(group_id: str, sender_id: str) -> list[dict]:
+    """tl-admin 用：一个人在一个会话（bot_id:群或人）里的画像，带可读的标签"""
+    return [{**f, "label": _format_key(f["key"])} for f in list_user_memory(group_id, sender_id)]
+
+
 def upsert_user_memory(group_id: str, sender_id: str, facts: list[dict], source: str = "skill") -> int:
     """
     批量写入用户记忆条目。

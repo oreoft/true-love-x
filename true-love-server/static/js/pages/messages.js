@@ -1,9 +1,10 @@
 /**
  * 聊天记录：左边选会话，右边往上滚自动加载更早的消息（按消息 id 往前翻页，每页 40 条），只读
+ * 点消息上的发送者名字，看 AI 在这个会话里记下的这个人的画像（存在 AI 库里，经 server 转发，一次只取一个人）
  */
 
 import { botApi } from '../api.js';
-import { $, $$, esc, highlight, localTime } from '../ui.js';
+import { $, $$, esc, highlight, localTime, modal } from '../ui.js';
 
 const PAGE_SIZE = 40;
 // 离顶部多少像素时加载更早的一页
@@ -82,7 +83,7 @@ export async function show(root, ctx) {
 
     const renderMessage = (msg) => `
         <div class="msg ${msg.is_at_me ? 'at' : ''}">
-            <div class="meta"><span>${esc(msg.sender_name || msg.sender_id)}</span><span class="mono">${esc(localTime(msg.created_at_iso))}</span>
+            <div class="meta"><button class="sender" data-sender="${esc(msg.sender_id)}" title="看 AI 记下的画像">${esc(msg.sender_name || msg.sender_id)}</button><span class="mono">${esc(localTime(msg.created_at_iso))}</span>
                 ${TYPE_NAMES[msg.msg_type] ? `<span class="tag">${TYPE_NAMES[msg.msg_type]}</span>` : ''}
                 <span class="mono">#${msg.id}</span></div>
             <div class="body">${highlight(msg.content || '', state.keyword)}</div>
@@ -92,7 +93,32 @@ export async function show(root, ctx) {
     $('#search', root).onclick = search;
     $('#keyword', root).onkeydown = (e) => { if (e.key === 'Enter') search(); };
     $('#clear', root).onclick = () => { $('#keyword', root).value = ''; search(); };
+    // 消息是滚动时陆续加进来的，在容器上统一接点击
+    box.onclick = (e) => {
+        const sender = e.target.closest('[data-sender]');
+        if (sender) showProfile(api, chats.find((c) => c.chat_id === state.chatId), sender.dataset.sender);
+    };
     $$('.conv', root).forEach((el) => { el.onclick = () => selectChat(el.dataset.chat); });
     box.onscroll = () => { if (box.scrollTop < LOAD_THRESHOLD) loadOlder(); };
     selectChat(state.chatId);
+}
+
+/** 一个人在这个会话里的画像：AI 从聊天里记下的信息 */
+async function showProfile(api, chat, sender) {
+    const box = modal(`<h3>画像 · ${esc(sender)}</h3><div class="muted" style="font-size:12px">在「${esc(chat.chat_name)}」里记下的</div>
+        <div class="loader">加载中…</div>
+        <div class="foot"><button class="btn" data-close>关闭</button></div>`);
+    let facts;
+    try {
+        facts = (await api.memory(chat.chat_id, sender)).facts;
+    } catch (e) {
+        if (box.isConnected) $('.loader', box).outerHTML = `<div class="banner">${esc(e.message)}</div>`;
+        return;
+    }
+    if (!box.isConnected) return;  // 加载时弹窗已经关了
+    $('.loader', box).outerHTML = facts.length
+        ? `<div style="max-height:60vh;overflow:auto;display:grid;gap:6px">${facts.map((f) => `
+            <div style="font-size:13px"><span class="muted">${esc(f.label)}</span>　${esc(f.value)}
+                <span class="muted mono" style="font-size:11px">${esc(f.updated_at || "")}</span></div>`).join('')}</div>`
+        : '<div class="empty">AI 还没记下这个人的信息。他聊到自己的情况、或者有人让机器人分析他的发言时会记下来。</div>';
 }

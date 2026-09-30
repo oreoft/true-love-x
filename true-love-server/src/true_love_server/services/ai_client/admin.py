@@ -5,6 +5,7 @@ AI 的管理接口，tl-admin 的请求经 server 转发过去
 都是 POST，token 放在请求体中：
 - /admin/skill/*：技能（内置的和安装的）和它们的权限点，所有机器人共用
 - /admin/persona/list、/admin/persona/save、/admin/persona/delete：人设（按机器人，"*" 是所有机器人共用）
+- /admin/memory/get：一个群或私聊里某个人的画像（只读）
 - /admin/model/list、/admin/model/save：模型（所有机器人共用）
 """
 import logging
@@ -60,6 +61,13 @@ async def save_skill_permissions(skill: str, permissions: list[str]) -> dict:
 
 async def save_default_permissions(permissions: list[str]) -> dict:
     return await _call("/admin/skill/default-permissions/save", {"permissions": permissions}, "保存默认权限点")
+
+
+# ==================== 画像 ====================
+
+async def get_memory(bot_id: str, chat: str, sender: str) -> dict:
+    """{"facts": [{"key", "label", "value", "source", "updated_at"}]}"""
+    return await _call("/admin/memory/get", {"bot_id": bot_id, "chat": chat, "sender": sender}, "获取画像")
 
 
 # ==================== 人设 ====================

@@ -101,6 +101,21 @@ async def save_default_permissions(request: dict):
     return APIResponse.success({"permissions": [skill_access_service.format_point(p) for p in points]})
 
 
+# ==================== 画像 ====================
+
+@admin_router.post("/memory/get")
+async def get_memory(request: dict):
+    """一个会话（这个机器人里的群或私聊）里某个人的画像；只读"""
+    if not verify_token(request.get("token", "")):
+        return APIResponse.token_error()
+    bot_id, chat = request.get("bot_id", "").strip(), request.get("chat", "").strip()
+    sender = request.get("sender", "").strip()
+    if not bot_id or not chat or not sender:
+        return APIResponse.error("bot_id、chat 和 sender 不能为空")
+    from true_love_ai.memory.memory_manager import describe_user_memory
+    return APIResponse.success({"facts": describe_user_memory(f"{bot_id}:{chat}", sender)})
+
+
 # ==================== 人设 ====================
 
 @admin_router.post("/persona/list")

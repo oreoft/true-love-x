@@ -118,6 +118,8 @@ td.wrap { max-width: 320px; overflow-wrap: anywhere; }
 .msgs { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
 .msg { display: flex; flex-direction: column; gap: 2px; max-width: 680px; }
 .msg .meta { font-size: 11px; color: var(--muted); display: flex; gap: 8px; flex-wrap: wrap; }
+.msg .meta .sender { background: none; border: 0; padding: 0; font: inherit; color: var(--accent); cursor: pointer; }
+.msg .meta .sender:hover { text-decoration: underline; }
 .msg .body { background: var(--bg); border-radius: 8px; padding: 6px 10px; overflow-wrap: anywhere; white-space: pre-wrap; }
 .msg.at .body { background: var(--accent-soft); }
 .msg mark { background: var(--warn-soft); color: inherit; padding: 0 2px; border-radius: 2px; }
