@@ -11,6 +11,7 @@ import signal
 import sys
 from threading import Event
 
+from true_love_common.observability.logging import LoggingConfig
 from true_love_common.wechat_account import current_wxid
 
 from true_love_base.api import server
@@ -71,7 +72,7 @@ def main():
         config.callback = f"http://{tailnet_ip()}:{server.HTTP_PORT}"
     except RuntimeError as e:
         raise SystemExit(f"Cannot start without a tailnet address: {e}")
-    LOG.info("Bot [%s] reports callback %s to the server", config.bot_id, config.callback)
+    LOG.info("Reporting callback %s to the server", config.callback)
 
     # 初始化微信客户端和机器人（不连接微信）
     client, robot = init_wx()
@@ -86,9 +87,6 @@ def main():
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-
-    if not robot.master:
-        LOG.warning(f"Bot [{config.bot_id}] has no master, startup and shutdown are not announced")
 
     # 是否已经向 master 报告过启动成功
     announced = False
@@ -150,6 +148,7 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
         LOG.warning(f"Failed to load {len(failed_chats)} listen chats: {failed_chats}")
 
     if not robot.master:
+        LOG.warning(f"Bot [{robot.client.bot_id}] has no master, startup and shutdown are not announced")
         return True
 
     # 发送启动通知，包含监听成功和失败的列表
@@ -175,10 +174,11 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
 
 def init_wx() -> tuple[WxAutoClient, Robot]:
     # 初始化微信客户端；连接微信由 WxSupervisor 负责，微信没开也不影响 base 启动
-    # 连接时核对登录的号，不是部署时指定的那个就不接管
-    client = WxAutoClient(bot_id=config.bot_id, account_of=current_wxid)
-    server_client.use_self_name(client.get_self_name)
+    # 这个 base 跑的是哪个号，每次连上微信时从本机读当前登录的 wxid
+    client = WxAutoClient(account_of=current_wxid)
+    server_client.use_identity(lambda: client.bot_id, client.get_self_name)
+    LoggingConfig.add_loki_tags(lambda: {"bot_id": client.bot_id})
 
     # 初始化机器人；监听列表在连上微信后向 server 取
-    robot = Robot(client, master=config.master_wix)
+    robot = Robot(client, master_of=config.master_of)
     return client, robot

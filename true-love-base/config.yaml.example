@@ -1,11 +1,10 @@
 # True Love Base Configuration
 # Copy this file to config.yaml and modify as needed
 
-# This file is shared by every base. Each base runs one bot (one WeChat account); the deploy injects
-# its wxid as the BOT_ID environment variable, and base reads its own entry from this map.
-# Base refuses to start when BOT_ID is missing from the map, and does not take over a WeChat
-# that is logged in to any other account.
+# This file is shared by every base. Each base runs the WeChat account logged in on its machine:
+# when WeChat connects, base reads that account's wxid from the machine and looks up its entry here.
 # master: the nickname that gets startup/shutdown notices, and everything sent with is_master.
+# An account that is not listed still works, it just has no master.
 bots:
   wxid_your_bot_wxid:
     master: "your_friend_nickname"

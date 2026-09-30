@@ -37,7 +37,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.sdk.IsOnline.return_value = True
         self.wechat_running = True
         self.server = types.SimpleNamespace(
-            get_chat=Mock(), fetch_listen_chats=Mock(return_value=[]), use_self_name=Mock())
+            get_chat=Mock(), fetch_listen_chats=Mock(return_value=[]), use_identity=Mock())
 
         def open_wechat(**kwargs):
             if not self.wechat_running:
@@ -54,6 +54,9 @@ class ListenerLifecycleTests(unittest.TestCase):
             ),
             "wxautox4.param": module("wxautox4.param", WxParam=type("WxParam", (), {})),
             "true_love_common.chat_msg": module("true_love_common.chat_msg", ChatMsg=object),
+            "true_love_common.observability.logging": module(
+                "true_love_common.observability.logging", LoggingConfig=Mock()
+            ),
             "true_love_common.observability.trace": module(
                 "true_love_common.observability.trace", set_trace_id=lambda value: None
             ),
@@ -70,7 +73,7 @@ class ListenerLifecycleTests(unittest.TestCase):
             "true_love_base.configuration": module(
                 "true_love_base.configuration",
                 Config=lambda: types.SimpleNamespace(
-                    master_wix="owner", bot_id="wxid_m8s", callback="",
+                    master_of=lambda bot_id: "owner" if bot_id == "wxid_first" else "", callback="",
                 ),
             ),
             "true_love_base.services": module(
@@ -90,7 +93,7 @@ class ListenerLifecycleTests(unittest.TestCase):
             "lifecycle_supervisor", "services/wx_supervisor.py"
         )
         self.main_module = load_source("lifecycle_main", "main.py")
-        for name, value in (("current_wxid", lambda: "wxid_m8s"), ("tailnet_ip", lambda: "100.64.0.8")):
+        for name, value in (("current_wxid", lambda: "wxid_first"), ("tailnet_ip", lambda: "100.64.0.8")):
             patcher = patch.object(self.main_module, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -372,11 +375,14 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         deliver(types.SimpleNamespace(attr="friend"), object())
 
-        self.assertEqual(self.client_module.convert_message.call_args.kwargs["bot_id"], "wxid_m8s")
+        self.assertEqual(self.client_module.convert_message.call_args.kwargs["bot_id"], "wxid_first")
 
-    def test_robot_knows_the_master_of_this_bot(self):
+    def test_robot_knows_the_master_of_the_account_it_finds_logged_in(self):
         client, robot = self.main_module.init_wx()
         self.addCleanup(robot.cleanup)
+        self.assertEqual(robot.master, "")
+
+        client.connect()
 
         self.assertEqual(robot.master, "owner")
 

@@ -51,8 +51,7 @@ class ListenFetchTests(unittest.TestCase):
                 "true_love_common.http.client", post=Mock(), post_json=self.post_json),
             "true_love_base.configuration": module(
                 "true_love_base.configuration",
-                Config=lambda: types.SimpleNamespace(
-                    bot_id="wxid_m8s", callback="http://100.64.0.8:5000", http_token="token")),
+                Config=lambda: types.SimpleNamespace(callback="http://100.64.0.8:5000", http_token="token")),
             "true_love_base.models.api": module(
                 "true_love_base.models.api", ChatRequest=Mock(), ChatResponse=Mock()),
         }
@@ -69,7 +68,7 @@ class ListenFetchTests(unittest.TestCase):
 
     def test_list_is_fetched_for_this_bot_with_the_token(self):
         self.post_json.return_value = reply({"code": 0, "data": {"chats": ["群A", "好友B"]}})
-        self.client.use_self_name(lambda: "真爱粉")
+        self.client.use_identity(lambda: "wxid_first", lambda: "真爱粉")
 
         self.assertEqual(self.client.fetch_listen_chats(self.clock), ["群A", "好友B"])
 
@@ -77,7 +76,7 @@ class ListenFetchTests(unittest.TestCase):
         self.assertEqual(url, "http://server.test:8089/base/listen/list")
         self.assertEqual(payload, {
             "token": "token",
-            "bot": {"bot_id": "wxid_m8s", "platform": "wechat", "callback": "http://100.64.0.8:5000", "name": "真爱粉"},
+            "bot": {"bot_id": "wxid_first", "platform": "wechat", "callback": "http://100.64.0.8:5000", "name": "真爱粉"},
         })
 
     def test_retries_with_growing_delays_until_the_server_answers(self):

@@ -7,15 +7,15 @@
    库里的 platform 列、提醒和定时任务参数里的 bot_id，新 server 在这个号第一次登记时自己补上，这里不用改。
 
        python3 scripts/migrate_to_single_server.py server \\
-           --db wxid_ii1pon2s4t4h22=/path/from/m8s/group_messages.db \\
-           --db wxid_oc36wts1bhxr19=/path/from/ser/group_messages.db \\
+           --db <真爱粉的 wxid>=/path/from/m8s/group_messages.db \\
+           --db <kun jr 的 wxid>=/path/from/ser/group_messages.db \\
            --out /path/to/new/server/dbs [--apply]
 
 2. AI：会话 key 从 "wechat:群或人" 改成 "bot_id:群或人"。以前的微信会话分不出是哪个号的，全部归到一个号（真爱粉）。
    用户画像的 group_id 就是会话 key，一起改。别的平台的会话（lark:）不动，只报个数。
 
        python3 scripts/migrate_to_single_server.py ai --db /path/to/ai/dbs/ai_data.db \\
-           --bot wxid_ii1pon2s4t4h22 [--apply]
+           --bot <真爱粉的 wxid> [--apply]
 
 两步都要在对应服务停着的时候做，--apply 之前会先把要改的库备份成 *.bak-<时间>。
 """

@@ -11,7 +11,7 @@ import logging
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Callable, Optional
 
 from true_love_common.chat_msg import ChatMsg
 from true_love_base.core import WxAutoClient
@@ -31,16 +31,19 @@ class Robot:
     # 线程池配置
     MAX_WORKERS = 10
 
-    def __init__(self, client: WxAutoClient, master: str = "") -> None:
+    def __init__(self, client: WxAutoClient, master: str = "",
+                 master_of: Optional[Callable[[str], str]] = None) -> None:
         """
         初始化机器人
         
         Args:
             client: 微信客户端实例
-            master: 这台机器的管理员昵称，没有时为空串
+            master: 管理员昵称，没有时为空串
+            master_of: 按当前登录的号查管理员；给了就忽略 master（号是连上微信后才读到的）
         """
         self.client = client
-        self.master = master
+        self._master = master
+        self._master_of = master_of
         self.LOG = logging.getLogger("Robot")
 
         # 消息处理线程池
@@ -55,6 +58,13 @@ class Robot:
         self._chat_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
         self.LOG.info(f"Robot initialized, max_workers: {self.MAX_WORKERS}")
+
+    @property
+    def master(self) -> str:
+        """当前登录的号的管理员昵称，没有时为空串"""
+        if self._master_of is not None:
+            return self._master_of(self.client.bot_id)
+        return self._master
 
     def forward_msg(self, msg: ChatMsg) -> str:
         """

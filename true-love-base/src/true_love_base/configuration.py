@@ -9,7 +9,6 @@ Configuration - 配置管理模块
 """
 
 import logging
-import os
 from typing import Optional
 
 import yaml
@@ -38,24 +37,20 @@ class Config:
         
         self.config = self._load_config()
 
-        # 这个 base 跑的是哪个号：部署时注入 BOT_ID（微信是 wxid），所有 base 共用一份配置，按它取自己那一段
-        self.bot_id = os.environ.get("BOT_ID", "").strip()
-
-        # 先初始化日志系统（使用配置文件中的 loki 配置），日志带上 bot_id 方便按号筛选
+        # 先初始化日志系统（使用配置文件中的 loki 配置）
         self._setup_logging()
 
-        bot = self._find_bot(self.config.get("bots"), self.bot_id)
-        self.master_wix = str(bot.get("master") or "").strip()
         self.http_token = self.config["http_token"]
+        # 所有 base 共用一份配置，按号（wxid）写各自的管理员；这个 base 跑的是哪个号，连上微信时才读得到
+        bots = self.config.get("bots")
+        self.bots: dict = bots if isinstance(bots, dict) else {}
         # server 回调这个 base 的地址，启动时由 main 用 tailnet 地址填上
         self.callback = ""
 
         Config._initialized = True
 
         LOG = logging.getLogger("Config")
-        if not self.master_wix:
-            LOG.warning(f"No master configured for bot [{self.bot_id}], notifications to the master are off")
-        LOG.info(f"Config loaded: bot_id={self.bot_id}, master_wix={self.master_wix}")
+        LOG.info(f"Config loaded: {len(self.bots)} bots configured")
 
     def _setup_logging(self) -> None:
         """设置日志系统（从配置文件读取 Loki 配置）"""
@@ -69,24 +64,14 @@ class Config:
             loki_url=loki_config.get("loki_url", ""),
             loki_user_id=loki_config.get("user_id", ""),
             loki_api_key=loki_config.get("api_key", ""),
-            loki_tags={"bot_id": self.bot_id} if self.bot_id else None,
         )
 
-    @staticmethod
-    def _find_bot(bots, bot_id: str) -> dict:
-        """
-        配置里这个号的那一段；没注入 BOT_ID 或者表里没有这个号时抛 SystemExit，base 不启动
-
-        Args:
-            bots: 配置里的 bots，{bot_id: {master: 管理员昵称}}
-            bot_id: 部署时注入的 BOT_ID
-        """
-        if not bot_id:
-            raise SystemExit("BOT_ID is not set: deploy base with the wxid of the account it runs")
-        bot = bots.get(bot_id) if isinstance(bots, dict) else None
+    def master_of(self, bot_id: str) -> str:
+        """这个号的管理员昵称，没配置时为空串"""
+        bot = self.bots.get(bot_id) if bot_id else None
         if not isinstance(bot, dict):
-            raise SystemExit(f"Bot [{bot_id}] is not in the bots map of config.yaml, add it before starting base")
-        return bot
+            return ""
+        return str(bot.get("master") or "").strip()
 
     @staticmethod
     def _load_config() -> dict:

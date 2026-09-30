@@ -28,19 +28,20 @@ LOG = logging.getLogger("ServerClient")
 # 所有 base 共用一个 server，地址写在 true_love_common.hosts
 CHAT_ENDPOINT = f"{SERVER_HOST}/base/on-message"
 
-# 当前登录的昵称，由 main 在创建微信客户端后接上
+# 当前登录的号和昵称，由 main 在创建微信客户端后接上；号是连上微信时从本机读出来的
+_bot_id: Callable[[], str] = lambda: ""
 _self_name: Callable[[], str] = lambda: ""
 
 
-def use_self_name(source: Callable[[], str]) -> None:
-    """报给 server 的昵称从哪里取"""
-    global _self_name
-    _self_name = source
+def use_identity(bot_id: Callable[[], str], self_name: Callable[[], str]) -> None:
+    """报给 server 的号和昵称从哪里取"""
+    global _bot_id, _self_name
+    _bot_id, _self_name = bot_id, self_name
 
 
 def bot_info() -> BotInfo:
     """这个 base 的机器人信息，每次调 server 都带上"""
-    return BotInfo(bot_id=config.bot_id, platform="wechat", callback=config.callback, name=_self_name())
+    return BotInfo(bot_id=_bot_id(), platform="wechat", callback=config.callback, name=_self_name())
 
 # ==================== HTTP Client 连接复用 ====================
 

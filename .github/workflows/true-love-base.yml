@@ -21,7 +21,8 @@ jobs:
     name: Deploy Base (${{ matrix.machine }})
     runs-on: ubuntu-latest
     environment: production
-    # Each machine runs one bot: the WeChat account logged in there. One failing machine does not stop the other.
+    # Each machine runs the WeChat account logged in there; base reads which one it is from the machine itself.
+    # One failing machine does not stop the other.
     strategy:
       fail-fast: false
       matrix:
@@ -30,19 +31,14 @@ jobs:
             host_secret: M8S_GW_HOST
             key_secret: M8S_SSH_DOOR_KEY
             user: admin
-            bot_id: wxid_ii1pon2s4t4h22  # 真爱粉
-            bot_name: 真爱粉
           - machine: ser
             host_secret: SER_GW_HOST
             key_secret: SER_SSH_DOOR_KEY
             user: server
-            bot_id: wxid_oc36wts1bhxr19  # kun jr
-            bot_name: kun jr
     env:
       SERVER_IP: ${{ secrets[matrix.host_secret] }}
       SERVER_USER: ${{ matrix.user }}
       SERVER_SSH_KEY: ${{ secrets[matrix.key_secret] }}
-      BOT_ID: ${{ matrix.bot_id }}
 
     steps:
       - name: Checkout
@@ -93,8 +89,6 @@ jobs:
             $configDir = Join-Path ([Environment]::GetFolderPath('Desktop')) 'config-center\true-love-n\true-love-base'
             New-Item -ItemType Directory -Force -Path $configDir | Out-Null
             Move-Item -Force -Path (Join-Path $HOME '.tl-config-true-love-base.yaml') -Destination (Join-Path $configDir 'config.yaml')
-            # The runner reads the bot id from this file into BOT_ID
-            Set-Content -NoNewline -Encoding ascii -Path (Join-Path $configDir 'bot_id') -Value '${{ env.BOT_ID }}'
 
             # Pull before stopping anything: if it fails, base keeps running; the task is also (re)registered from these scripts
             git -C $repoRoot pull --ff-only
@@ -134,7 +128,7 @@ jobs:
             "token": "${{ secrets.TL_NOTIFY_TOKEN }}",
             "sendReceiver": "master",
             "atReceiver": "",
-            "content": "${{ matrix.bot_name }} base 模块已经成功部署（${{ matrix.machine }}）"
+            "content": "${{ matrix.machine }} 上的 base 模块已经成功部署"
           }' || echo "通知发送失败，但部署成功"
 
 

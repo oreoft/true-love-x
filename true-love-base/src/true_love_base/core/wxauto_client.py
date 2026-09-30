@@ -53,7 +53,7 @@ class WxAutoClient():
 
         Args:
             bot_id: 这个机器人的标识（微信是 wxid），随每条消息带给下游
-            account_of: 读出当前登录的微信号；给了就在连接时核对，登录的不是 bot_id 这个号就不接管
+            account_of: 读出当前登录的微信号；给了就在每次连接时读一次，用它作为 bot_id
         """
         self._wx = None
         self._running = True
@@ -78,7 +78,8 @@ class WxAutoClient():
             # 主窗口还在但已经掉线（比如断网）时先不接管，等它恢复在线
             if not wx.IsOnline():
                 raise RuntimeError("WeChat main window is open but not online")
-            self._check_account()
+            if self._account_of is not None:
+                self._bot_id = self._account_of()
         except Exception as e:
             # 离线期间每隔几秒就会重试一次
             level = logging.DEBUG if str(e) == self._connect_error else logging.WARNING
@@ -89,16 +90,8 @@ class WxAutoClient():
         self._connect_error = None
         self._self_name = str(getattr(wx, 'nickname', None) or "")
         self._state_since = datetime.now()
-        LOG.info("WxAutoClient connected, self: %s", self.get_self_name())
+        LOG.info("WxAutoClient connected, self: %s, bot_id: %s", self.get_self_name(), self._bot_id)
         return True
-
-    def _check_account(self) -> None:
-        """登录的号和部署时指定的不一致时抛异常，避免用别人的身份收发消息"""
-        if self._account_of is None:
-            return
-        account = self._account_of()
-        if account != self._bot_id:
-            raise RuntimeError(f"WeChat is logged in as {account}, but this base runs bot {self._bot_id}")
 
     def disconnect(self) -> None:
         """微信掉线后丢弃当前实例；监听在下一次 connect() 之后重新注册"""
@@ -172,6 +165,11 @@ class WxAutoClient():
             return False
 
     # ==================== 账号信息 ====================
+
+    @property
+    def bot_id(self) -> str:
+        """当前登录的号（微信是 wxid），连上微信之前可能为空"""
+        return self._bot_id
 
     def get_self_name(self) -> str:
         """获取当前登录账号昵称"""

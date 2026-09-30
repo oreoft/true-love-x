@@ -102,21 +102,29 @@ class OfflineClientTests(unittest.TestCase):
         self.assertFalse(self.client.is_connected())
         sdk.SendMsg.assert_not_called()
 
-    def test_wechat_logged_in_to_another_account_is_not_adopted(self):
-        client = load_client_module(self.desktop).WxAutoClient(bot_id="wxid_m8s", account_of=lambda: "wxid_other")
+    def test_bot_is_the_account_logged_in_when_wechat_connects(self):
+        accounts = iter(["wxid_first", "wxid_second"])
+        client = load_client_module(self.desktop).WxAutoClient(account_of=lambda: next(accounts))
+        self.desktop.log_in(new_sdk())
+
+        self.assertTrue(client.connect())
+        self.assertEqual(client.bot_id, "wxid_first")
+        client.disconnect()
+        self.assertTrue(client.connect())
+        self.assertEqual(client.bot_id, "wxid_second")
+
+    def test_wechat_is_not_adopted_when_the_account_cannot_be_read(self):
+        def unreadable():
+            raise RuntimeError("no wxid_ directory")
+
+        client = load_client_module(self.desktop).WxAutoClient(account_of=unreadable)
         self.desktop.log_in(new_sdk())
 
         with self.assertLogs("WxAutoClient", level="WARNING") as logs:
             self.assertFalse(client.connect())
 
         self.assertFalse(client.is_connected())
-        self.assertIn("wxid_other", logs.output[0])
-
-    def test_wechat_logged_in_to_this_bot_is_adopted(self):
-        client = load_client_module(self.desktop).WxAutoClient(bot_id="wxid_m8s", account_of=lambda: "wxid_m8s")
-        self.desktop.log_in(new_sdk())
-
-        self.assertTrue(client.connect())
+        self.assertIn("no wxid_ directory", logs.output[0])
 
     def test_repeated_connect_failures_are_reported_once(self):
         with self.assertLogs("WxAutoClient", level="WARNING") as logs:
