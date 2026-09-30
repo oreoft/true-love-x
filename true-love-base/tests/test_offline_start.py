@@ -333,6 +333,67 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual([m.is_at_me for m in self.received], [False, True])
 
 
+class SendFileConfirmationTests(unittest.TestCase):
+    """SendFiles sometimes reports failure for a file that did go out; the chat listener has the final word."""
+
+    def setUp(self):
+        self.desktop = WeChatDesktop()
+        self.module = load_client_module(self.desktop)
+        self.client = self.module.WxAutoClient(bot_id="win10-m8s")
+        self.sdk = new_sdk()
+        self.window = Mock(who="room")
+        self.sdk.GetSubWindow.return_value = self.window
+        self.desktop.log_in(self.sdk)
+        self.assertTrue(self.client.connect())
+        self.assertTrue(self.client.add_message_listener("room", lambda msg, chat: None))
+        self.deliver = self.sdk.AddListenChat.call_args.args[1]
+        confirm = patch.object(self.module, "SEND_CONFIRM_SECONDS", 1)
+        confirm.start()
+        self.addCleanup(confirm.stop)
+
+    def own(self, kind, content):
+        return Mock(attr="self", type=kind, content=content)
+
+    def fail_but_show_up(self, message):
+        def send(path):
+            self.deliver(message, Mock(who="room"))
+            return False
+        self.window.SendFiles.side_effect = send
+
+    def test_image_that_shows_up_in_the_chat_counts_as_sent(self):
+        self.fail_but_show_up(self.own("image", "图片"))
+
+        with self.assertLogs("WxAutoClient", level="WARNING"):
+            self.assertTrue(self.client.send_file("room", "send-files/moyu.jpg"))
+
+    def test_file_counts_as_sent_only_when_its_name_shows_up(self):
+        self.fail_but_show_up(self.own("file", "文件\nother.pdf"))
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.assertFalse(self.client.send_file("room", "send-files/report.pdf"))
+
+        self.fail_but_show_up(self.own("file", "文件\nreport.pdf\n微信电脑版"))
+        self.assertTrue(self.client.send_file("room", "send-files/report.pdf"))
+
+    def test_failure_with_nothing_in_the_chat_is_a_failure(self):
+        self.window.SendFiles.return_value = False
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.assertFalse(self.client.send_file("room", "send-files/moyu.jpg"))
+
+    def test_our_own_earlier_image_does_not_confirm_a_later_send(self):
+        self.deliver(self.own("image", "图片"), Mock(who="room"))
+        self.window.SendFiles.return_value = False
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.assertFalse(self.client.send_file("room", "send-files/zaobao.jpg"))
+
+    def test_successful_send_does_not_wait(self):
+        self.window.SendFiles.return_value = True
+
+        self.assertTrue(self.client.send_file("room", "send-files/moyu.jpg"))
+
+
 class Timeline:
     """A stop event that changes the world between supervisor steps, then asks it to stop."""
 
