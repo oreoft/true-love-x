@@ -14,11 +14,10 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/true-love-server
   
   # SSH 部署配置
-  # server 和 AI 部署在同一台机器（ser）上，所有机器人共用
-  SERVER_IP: ${{ secrets.SER_GW_HOST }}
+  SERVER_IP: ${{ secrets.M8S_GW_HOST }}
   SERVER_PORT: 2233
-  SERVER_USER: server
-  SERVER_SSH_KEY: ${{ secrets.SER_SSH_DOOR_KEY }}
+  SERVER_USER: admin
+  SERVER_SSH_KEY: ${{ secrets.M8S_SSH_DOOR_KEY }}
   
   # 通知配置
   NOTIFY_URL: ${{ secrets.TL_NOTIFY_PATH }}

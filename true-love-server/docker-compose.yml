@@ -27,9 +27,8 @@ services:
     restart: unless-stopped
 
     # 端口映射（Docker Desktop WSL2 模式下 host 网络无效）
-    # 和 AI 部署在同一台机器上，AI 占了 8088，server 对外用 8089
     ports:
-      - "8089:8088"
+      - "8088:8088"
 
     # 卷挂载
     volumes:
