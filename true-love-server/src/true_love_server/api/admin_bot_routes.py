@@ -220,7 +220,7 @@ def _check_settings(request: dict) -> None:
 @admin_bot_router.post("/{bot_id}/listen/mute-all-groups")
 async def listen_mute_all_groups(bot_id: str, request: dict = Body(default={})):
     """
-    把机器人微信里的群都设成消息免打扰，私聊轮询就不会点开它们；开了子窗口的群照常收消息
+    把机器人微信会话列表里的群都设成消息免打扰，私聊轮询就不会点开它们；开了子窗口的群照常收消息
 
     Returns:
         - total / muted / already / failed，见 base 的 /groups/mute-all

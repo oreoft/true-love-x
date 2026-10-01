@@ -533,28 +533,35 @@ class WxAutoClient():
 
     def mute_all_groups(self) -> dict:
         """
-        把通讯录里的群都设成消息免打扰，已经免打扰的跳过
+        把主窗口会话列表里的群都设成消息免打扰；不活跃、不在会话列表里的群不管
+
+        会话列表不标注是群还是私聊，要逐个点开没免打扰的会话看一眼。有未读的先跳过：
+        点开会把私聊的红点点掉，私聊轮询就收不到了；下次再点一键免打扰时补上。
 
         Returns:
-            {"total": 群数, "muted": [新设的], "already": [本来就是的], "failed": [{"chat", "reason"}]}
+            {"total": 会话数, "muted": [新设的群], "already": [本来就免打扰的会话],
+             "unread": [有未读先跳过的], "failed": [{"chat", "reason"}]}
         """
-        muted, already, failed = [], [], []
+        muted, already, unread, failed = [], [], [], []
         _init_uia_in_thread()
         with ui_transaction():
-            groups = [str(group[0]) for group in (self.wx.GetAllRecentGroups() or [])]
             self.wx.SwitchToChat()
-            for name in groups:
+            names = [s.name for s in self.wx.GetSession() or []]
+            for name in names:
                 try:
                     session = self._session(name)
                     if session is None:
-                        # 会话列表里没有的群先打开一次，它就会出现在列表里
-                        self.wx.ChatWith(name, exact=True)
-                        session = self._session(name)
-                    if session is None:
-                        failed.append({"chat": name, "reason": "会话列表里找不到"})
-                    elif session.ismute:
+                        continue
+                    if session.ismute:
                         already.append(name)
-                    elif not session.select_option(_MUTE_OPTION):
+                        continue
+                    if session.new_count:
+                        unread.append(name)
+                        continue
+                    session.click()
+                    if (self.wx.ChatInfo() or {}).get("chat_type") != "group":
+                        continue
+                    if not self._session(name).select_option(_MUTE_OPTION):
                         failed.append({"chat": name, "reason": "右键菜单里没有免打扰"})
                     elif self._wait_muted(name):
                         muted.append(name)
@@ -563,9 +570,9 @@ class WxAutoClient():
                 except Exception as e:
                     LOG.exception("Failed to mute group [%s]", name)
                     failed.append({"chat": name, "reason": str(e)})
-        LOG.info("Muted groups: total=%d muted=%d already=%d failed=%s",
-                 len(groups), len(muted), len(already), failed)
-        return {"total": len(groups), "muted": muted, "already": already, "failed": failed}
+        LOG.info("Muted groups in %d sessions: muted=%s already=%d unread=%s failed=%s",
+                 len(names), muted, len(already), unread, failed)
+        return {"total": len(names), "muted": muted, "already": already, "unread": unread, "failed": failed}
 
     def accept_new_friends(self) -> list[str]:
         """

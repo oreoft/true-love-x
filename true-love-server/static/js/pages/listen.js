@@ -163,12 +163,15 @@ export async function show(root, ctx) {
             if (result) toast(result.applied ? '群回复方式已保存' : '群回复方式已保存，base 下次连上微信时生效');
             reloadSettings();
         };
-        $('#muteGroups', root).onclick = (e) => confirmModal('把所有群设成免打扰？',
-            'base 会在微信里逐个打开群的右键菜单，群多时要等一两分钟。开了子窗口的群照常收消息。', async () => {
+        $('#muteGroups', root).onclick = (e) => confirmModal('把会话列表里的群设成免打扰？',
+            'base 会逐个点开会话列表里没免打扰的会话，是群就设成免打扰；不在会话列表里的不活跃群不管，'
+            + '有未读的会话先跳过。开了子窗口的群照常收消息。', async () => {
                 const result = await busy(e.target, '设置中…', () => attempt(() => api.listenMuteAllGroups()));
                 if (result) {
                     const failed = result.failed.map((item) => `${item.chat}（${item.reason}）`).join('、');
-                    toast(`共 ${result.total} 个群：新设 ${result.muted.length} 个，原本就是 ${result.already.length} 个`
+                    const unread = (result.unread || []).length;
+                    toast(`新设 ${result.muted.length} 个群，原本就免打扰 ${result.already.length} 个会话`
+                        + (unread ? `，${unread} 个有未读先跳过` : '')
                         + (failed ? `，失败：${failed}` : ''), failed ? 'error' : undefined);
                 }
             }, '设置');

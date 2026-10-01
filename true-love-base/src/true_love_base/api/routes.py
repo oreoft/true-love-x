@@ -199,10 +199,10 @@ async def apply_settings(request: dict[str, Any] | None = Body(default=None)) ->
 @router.post("/groups/mute-all")
 async def mute_all_groups() -> dict[str, Any]:
     """
-    把通讯录里的群都设成消息免打扰，私聊轮询就不会点开它们；逐个点右键菜单，群多时要等一会儿
+    把会话列表里的群都设成消息免打扰，私聊轮询就不会点开它们；不活跃、不在会话列表里的群不管
 
     Response:
-        - data: {"total", "muted": [...], "already": [...], "failed": [{"chat", "reason"}]}
+        - data: {"total", "muted": [...], "already": [...], "unread": [...], "failed": [{"chat", "reason"}]}
     """
     robot = _get_robot()
     unavailable = _unavailable(robot)

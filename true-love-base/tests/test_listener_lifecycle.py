@@ -573,27 +573,31 @@ class ListenerLifecycleTests(unittest.TestCase):
 
     # ==================== 一键群免打扰 ====================
 
-    def test_mute_all_groups_mutes_each_group_once(self):
-        sessions = {name: Mock(ismute=muted) for name, muted in (("loud", False), ("quiet", True), ("stuck", False))}
-        for name, session in sessions.items():
+    def test_mute_all_groups_mutes_the_groups_in_the_session_list(self):
+        kinds = {"loud": "group", "stuck": "group", "alice": "friend", "busy": "group", "quiet": "group"}
+        sessions = {}
+        for name, (muted, unread) in {"loud": (False, 0), "quiet": (True, 0), "busy": (False, 3),
+                                      "alice": (False, 0), "stuck": (False, 0)}.items():
+            session = Mock(ismute=muted, new_count=unread)
             session.name = name
+            session.click.side_effect = lambda name=name: setattr(self, "opened", name)
+            sessions[name] = session
         sessions["loud"].select_option.side_effect = lambda option: setattr(sessions["loud"], "ismute", True) or True
         sessions["stuck"].select_option.return_value = False
-        self.sdk.GetAllRecentGroups.return_value = [("loud", 3), ("quiet", 5), ("stuck", 7), ("gone", 9)]
         self.sdk.GetSession.side_effect = lambda: list(sessions.values())
+        self.sdk.ChatInfo.side_effect = lambda: {"chat_type": kinds[self.opened], "chat_name": self.opened}
 
         with self.assertLogs("WxAutoClient", level="INFO"):
             result = self.client.mute_all_groups()
 
         self.assertEqual(result, {
-            "total": 4, "muted": ["loud"], "already": ["quiet"],
-            "failed": [{"chat": "stuck", "reason": "右键菜单里没有免打扰"}, {"chat": "gone", "reason": "会话列表里找不到"}],
+            "total": 5, "muted": ["loud"], "already": ["quiet"], "unread": ["busy"],
+            "failed": [{"chat": "stuck", "reason": "右键菜单里没有免打扰"}],
         })
         sessions["loud"].select_option.assert_called_once_with("消息免打扰")
-        sessions["quiet"].select_option.assert_not_called()
-        self.sdk.ChatWith.assert_called_once_with("gone", exact=True)
-
-    # ==================== 群回复方式 ====================
+        sessions["alice"].select_option.assert_not_called()
+        sessions["busy"].click.assert_not_called()
+        self.sdk.GetAllRecentGroups.assert_not_called()
 
     def received(self, msg_id="m1", chat="group"):
         raw = Mock(attr="friend", id=msg_id)

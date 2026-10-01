@@ -20,7 +20,7 @@ LOG = logging.getLogger("WeChatClient")
 
 # base 加监听失败时会重试 3 次（实测 11 秒多），要等它返回真实结果
 _LISTEN_ADD_TIMEOUT = (2, 30)
-# 一键群免打扰要逐个点开群的右键菜单，群多时要一两分钟
+# 一键群免打扰要逐个点开会话列表里的会话，会话多时要等一会儿
 _MUTE_ALL_TIMEOUT = (2, 300)
 
 
