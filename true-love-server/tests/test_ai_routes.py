@@ -139,6 +139,7 @@ class ReminderTests(ServerCase):
 class ListenTests(ServerCase):
     def test_listen_is_added_on_the_base_of_the_bot_and_saved_in_its_list(self):
         callback = self.register("wxid_ser")
+        self.bases.reply(f"{callback}/listen/add", {"code": 0, "message": "success", "data": {"success": True}})
 
         response = self.post("/action/listen/add", bot_id="wxid_ser", chat_name="群A")
 

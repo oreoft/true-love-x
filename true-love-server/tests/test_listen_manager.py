@@ -44,8 +44,8 @@ class ListenManagerTests(ServerCase):
 
     def base_answers(self, success):
         answer = {"code": 0 if success else 107, "message": "ok" if success else "listener was not running"}
-        for path in ("/execute/wx", "/listen/add"):
-            self.bases.reply(f"{self.callback}{path}", answer)
+        self.bases.reply(f"{self.callback}/execute/wx", answer)
+        self.bases.reply(f"{self.callback}/listen/add", {**answer, "data": {"success": success}})
 
     def test_chat_is_saved_only_after_base_starts_listening(self):
         self.base_answers(False)
@@ -56,6 +56,15 @@ class ListenManagerTests(ServerCase):
         self.base_answers(True)
         self.assertTrue(self.run_async(self.manager.add_listen("new chat"))["success"])
         self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat", "new chat"])
+
+    def test_listen_is_not_saved_when_base_answers_but_fails_to_add(self):
+        self.base_answers(True)
+        self.bases.reply(f"{self.callback}/listen/add", {"code": 0, "message": "success", "data": {"success": False}})
+
+        with self.assertLogs("ListenManager", level="ERROR"):
+            self.assertFalse(self.run_async(self.manager.add_listen("new chat"))["success"])
+            self.assertFalse(self.run_async(self.manager.reset_listener("kept chat"))["success"])
+        self.assertFalse(listen_store.exists("wxid_m8s", "new chat"))
 
     def test_removal_is_saved_whether_or_not_base_was_listening(self):
         for success in (True, False):

@@ -46,7 +46,11 @@ class WeChatClient(BaseClient):
             return {"success": False, "data": None, "message": str(e)}
 
     async def add_listen_chat(self, nickname: str) -> dict:
-        return await self._call("add_listen_chat", "/listen/add", {"nickname": nickname}, timeout=_LISTEN_ADD_TIMEOUT)
+        result = await self._call("add_listen_chat", "/listen/add", {"nickname": nickname}, timeout=_LISTEN_ADD_TIMEOUT)
+        # base 请求成功但加监听失败时回 {"success": false}
+        if result["success"] and not (result["data"] or {}).get("success"):
+            return {**result, "success": False, "message": "base failed to add the listener"}
+        return result
 
     async def apply_settings(self, settings: dict) -> dict:
         return await self._call("apply_settings", "/settings", settings)
