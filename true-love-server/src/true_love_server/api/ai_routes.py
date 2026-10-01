@@ -45,6 +45,7 @@ async def action_send(request: dict):
         - is_master: 为 true 时发给这个机器人的管理员，不需要 receiver（可选）
         - content:   消息内容
         - at_user:   要@的用户（可选）
+        - reply_msg_id: 这条是在回复哪条消息（可选），base 按群回复方式设置 @、拍一拍或引用
     """
     bot = _bot(request)
     receiver = request.get("receiver", "")
@@ -61,7 +62,8 @@ async def action_send(request: dict):
     else:
         LOG.info("action/send: bot_id=%s receiver=%s at_user=%s content=%s",
                  bot.bot_id, receiver, at_user, content[:50])
-        success, error_msg = await base_client.send_text(bot.bot_id, receiver, at_user, content)
+        success, error_msg = await base_client.send_text(bot.bot_id, receiver, at_user, content,
+                                                         reply_msg_id=request.get("reply_msg_id", ""))
 
     if not success:
         raise ValidationException(f"消息发送失败: {error_msg}")

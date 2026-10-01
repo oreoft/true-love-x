@@ -146,6 +146,54 @@ class ListenPageTests(ServerCase):
 
         self.assertEqual(data["summary"], {"healthy": 1, "unhealthy": 0})
 
+    def test_switch_is_saved_and_pushed_to_the_base(self):
+        callback = self.register("wxid_ser")
+
+        data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, auto_accept_friends=True)["data"]
+
+        self.assertEqual(data, {"settings": {"private_poll": False, "auto_accept_friends": True, "group_reply": ["at"]},
+                                "applied": True})
+        self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["auto_accept_friends"])
+        [(url, payload)] = self.bases.sent()
+        self.assertEqual((url, payload), (f"{callback}/settings", {"auto_accept_friends": True}))
+
+    def test_group_reply_styles_are_saved_and_handed_to_the_base(self):
+        callback = self.register("wxid_ser")
+
+        self.post("/admin/bots/wxid_ser/listen/settings", token=None, group_reply=["tickle", "quote"])
+
+        self.assertEqual(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["group_reply"], ["tickle", "quote"])
+        self.assertEqual(self.post("/base/listen/list", bot=self.bot("wxid_ser"))["data"]["group_reply"],
+                         ["tickle", "quote"])
+        self.assertIn((f"{callback}/settings", {"group_reply": ["tickle", "quote"]}), self.bases.sent())
+
+    def test_switch_is_saved_while_the_base_is_offline(self):
+        callback = self.register("wxid_ser")
+        self.bases.reply(f"{callback}/settings", error=ConnectionError("base is down"))
+
+        with self.assertLogs("WeChatClient", level="ERROR"):
+            data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, private_poll=True)["data"]
+
+        self.assertEqual(data["applied"], False)
+        self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["private_poll"])
+
+    def test_only_known_yes_or_no_switches_are_accepted(self):
+        self.register("wxid_ser")
+
+        for body in ({"private_poll": "yes"}, {"someday": True}, {}, {"group_reply": []},
+                     {"group_reply": ["at", "wave"]}, {"group_reply": "at"}):
+            with self.subTest(body=body):
+                self.assertNotEqual(
+                    self.post("/admin/bots/wxid_ser/listen/settings", token=None, **body)["code"], 0)
+        self.assertEqual(self.bases.sent(), [])
+
+    def test_mute_all_groups_runs_on_the_base_of_the_chosen_bot(self):
+        callback = self.register("wxid_ser")
+        result = {"total": 2, "muted": ["群A"], "already": ["群B"], "failed": []}
+        self.bases.reply(f"{callback}/groups/mute-all", {"code": 0, "data": result})
+
+        self.assertEqual(self.post("/admin/bots/wxid_ser/listen/mute-all-groups", token=None)["data"], result)
+
     def test_bot_on_another_platform_has_no_listen_page(self):
         self.register("lark_app", platform="lark")
 

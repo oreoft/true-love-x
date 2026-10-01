@@ -18,7 +18,7 @@ from true_love_common.chat_msg import ChatMsg
 
 from .deps import verify_token
 from .exception_handlers import ApiResponse, ValidationException
-from ..services import bot_registry, listen_store
+from ..services import bot_registry, bot_settings, listen_store
 from ..services.bot_registry import BotRecord
 from ..services.message_service import handle_incoming
 
@@ -69,12 +69,12 @@ async def on_message(request: dict, background_tasks: BackgroundTasks):
 @base_router.post("/listen/list")
 async def listen_list(request: dict):
     """
-    微信 base 连上微信时来取要监听的群和好友
+    微信 base 连上微信时来取要监听的群和好友，以及其余设置（见 bot_settings.wechat_settings）
 
     Response:
-        - data: {"chats": [...]}
+        - data: {"chats": [...], "private_poll": bool, "auto_accept_friends": bool, "group_reply": [...]}
     """
     bot = _register(request)
     if not bot.can("listen"):
         raise ValidationException(f"机器人 {bot.bot_id} 是 {bot.platform}，没有监听功能")
-    return ApiResponse(data={"chats": listen_store.list_all(bot.bot_id)})
+    return ApiResponse(data={"chats": listen_store.list_all(bot.bot_id), **bot_settings.wechat_settings(bot.bot_id)})

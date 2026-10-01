@@ -73,8 +73,11 @@ class BaseClient:
             return False, str(e)
 
     async def send_text(self, receiver: str, at_user: str, content: str,
-                        raise_on_error: bool = False) -> tuple[bool, str]:
+                        raise_on_error: bool = False, reply_msg_id: str = "") -> tuple[bool, str]:
+        """reply_msg_id: 这条是在回复哪条消息，base 按群回复方式设置决定怎么回；平台不支持时忽略"""
         payload = {"sendReceiver": receiver, "atReceiver": at_user, "content": content}
+        if reply_msg_id:
+            payload["replyMsgId"] = reply_msg_id
         return await self._send("send_text", "/send/text", payload, raise_on_error=raise_on_error)
 
     async def send_file(self, url: str, receiver: str, raise_on_error: bool = False) -> tuple[bool, str]:

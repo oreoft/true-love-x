@@ -67,10 +67,10 @@ class ListenFetchTests(unittest.TestCase):
         self.addCleanup(clock.stop)
 
     def test_list_is_fetched_for_this_bot_with_the_token(self):
-        self.post_json.return_value = reply({"code": 0, "data": {"chats": ["群A", "好友B"]}})
+        self.post_json.return_value = reply({"code": 0, "data": {"chats": ["群A", "好友B"], "private_poll": True}})
         self.client.use_identity(lambda: "wxid_first", lambda: "真爱粉")
 
-        self.assertEqual(self.client.fetch_listen_chats(self.clock), ["群A", "好友B"])
+        self.assertEqual(self.client.fetch_listen_chats(self.clock), (["群A", "好友B"], {"private_poll": True}))
 
         url, payload = self.post_json.call_args.args
         self.assertEqual(url, "http://server.test:8089/base/listen/list")
@@ -83,7 +83,7 @@ class ListenFetchTests(unittest.TestCase):
         self.post_json.side_effect = [reply(ok=False)] * 3 + [reply({"code": 0, "data": {"chats": ["群A"]}})]
 
         with self.assertLogs("ServerClient", level="WARNING"):
-            self.assertEqual(self.client.fetch_listen_chats(self.clock), ["群A"])
+            self.assertEqual(self.client.fetch_listen_chats(self.clock), (["群A"], {}))
 
         self.assertEqual(self.clock.waits, [2, 4, 8])
 
@@ -96,12 +96,19 @@ class ListenFetchTests(unittest.TestCase):
         self.assertEqual(self.clock.now, self.client.LISTEN_FETCH_DEADLINE)
         self.assertLessEqual(max(self.clock.waits), self.client.LISTEN_FETCH_MAX_DELAY)
 
+    def test_everything_besides_the_chats_is_a_setting(self):
+        self.post_json.return_value = reply(
+            {"code": 0, "data": {"chats": ["群A"], "auto_accept_friends": False, "group_reply": ["at", "quote"]}})
+
+        self.assertEqual(self.client.fetch_listen_chats(self.clock).settings,
+                         {"auto_accept_friends": False, "group_reply": ["at", "quote"]})
+
     def test_business_error_is_retried_like_a_network_error(self):
         self.post_json.side_effect = [reply({"code": 401, "message": "failed token check"}),
                                       reply({"code": 0, "data": {"chats": []}})]
 
         with self.assertLogs("ServerClient", level="WARNING"):
-            self.assertEqual(self.client.fetch_listen_chats(self.clock), [])
+            self.assertEqual(self.client.fetch_listen_chats(self.clock), ([], {}))
 
     def test_shutdown_stops_the_retries(self):
         self.post_json.return_value = reply(ok=False)

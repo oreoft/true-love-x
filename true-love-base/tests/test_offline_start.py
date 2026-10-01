@@ -1,6 +1,7 @@
 """Base must outlive WeChat: start without it, connect later, notice when it drops."""
 
 import asyncio
+import contextlib
 import importlib.util
 import sys
 import threading
@@ -59,6 +60,12 @@ def load_client_module(desktop, real_converter=False):
     dependencies = {
         "true_love_base.wxautox4x.wxautox4x": module("true_love_base.wxautox4x.wxautox4x", WeChat=desktop.open),
         "wxautox4.param": module("wxautox4.param", WxParam=type("WxParam", (), {})),
+        "wxautox4.uia.uiautomation": module(
+            "wxautox4.uia.uiautomation", InitializeUIAutomationInCurrentThread=lambda: None
+        ),
+        "wxautox4.utils.lock": module(
+            "wxautox4.utils.lock", ui_transaction=lambda timeout=30.0: contextlib.nullcontext()
+        ),
         "true_love_base.utils.path_resolver": module(
             "true_love_base.utils.path_resolver", get_wx_imgs_dir=lambda: None, to_server_path=lambda path: path
         ),
@@ -576,7 +583,15 @@ class RoutesTests(unittest.TestCase):
         response = asyncio.run(self.routes.send_text({"sendReceiver": "alice", "content": "hi"}))
 
         self.assertEqual(response, {"code": 0, "message": "success", "data": None})
-        self.robot.send_text_msg.assert_called_once_with("hi", "alice", None)
+        self.robot.send_text_msg.assert_called_once_with("hi", "alice", None, "")
+
+    def test_reply_names_the_message_it_quotes(self):
+        self.log_in()
+
+        asyncio.run(self.routes.send_text(
+            {"sendReceiver": "room", "content": "hi", "atReceiver": "alice", "replyMsgId": "m1"}))
+
+        self.robot.send_text_msg.assert_called_once_with("hi", "room", "alice", "m1")
 
     def test_text_for_the_master_goes_to_the_master_of_this_bot(self):
         self.log_in()
@@ -584,14 +599,14 @@ class RoutesTests(unittest.TestCase):
         response = asyncio.run(self.routes.send_text({"is_master": True, "content": "deployed"}))
 
         self.assertEqual(response, {"code": 0, "message": "success", "data": None})
-        self.robot.send_text_msg.assert_called_once_with("deployed", "owner", None)
+        self.robot.send_text_msg.assert_called_once_with("deployed", "owner", None, "")
 
     def test_chat_that_happens_to_be_called_master_is_an_ordinary_receiver(self):
         self.log_in()
 
         asyncio.run(self.routes.send_text({"sendReceiver": "master", "content": "hi"}))
 
-        self.robot.send_text_msg.assert_called_once_with("hi", "master", None)
+        self.robot.send_text_msg.assert_called_once_with("hi", "master", None, "")
 
     def test_file_for_the_master_goes_to_the_master_of_this_bot(self):
         self.log_in()

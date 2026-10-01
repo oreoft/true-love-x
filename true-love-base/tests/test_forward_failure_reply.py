@@ -29,6 +29,13 @@ class ForwardFailureReplyTests(unittest.TestCase):
                 "true_love_base.services", __path__=[],
                 server_client=types.SimpleNamespace(get_chat=self.get_chat),
             ),
+            "true_love_base.services.private_poller": module(
+                "true_love_base.services.private_poller", PrivatePoller=Mock()
+            ),
+            "true_love_base.models.reply": module("true_love_base.models.reply", REPLY_STYLES=("at",)),
+            "true_love_base.services.friend_acceptor": module(
+                "true_love_base.services.friend_acceptor", FriendAcceptor=Mock()
+            ),
         }
         modules = patch.dict(sys.modules, dependencies)
         modules.start()

@@ -4,7 +4,7 @@ import unittest
 
 from server_env import ServerCase, http_result
 from true_love_server.core.db_engine import bot_session
-from true_love_server.services import bot_registry, listen_store
+from true_love_server.services import bot_registry, bot_settings, listen_store
 from true_love_server.services.group_message_repository import GroupMessageRepository
 
 
@@ -121,7 +121,15 @@ class ListenListTests(ServerCase):
 
         response = self.post("/base/listen/list", bot=self.bot("wxid_ser"))
 
-        self.assertEqual(response["data"], {"chats": ["群B"]})
+        self.assertEqual(response["data"], {"chats": ["群B"], "private_poll": False, "auto_accept_friends": False, "group_reply": ["at"]})
+
+    def test_private_poll_setting_comes_with_the_list(self):
+        self.register("wxid_ser")
+        bot_settings.set_bool("wxid_ser", bot_settings.PRIVATE_POLL, True)
+
+        response = self.post("/base/listen/list", bot=self.bot("wxid_ser"))
+
+        self.assertTrue(response["data"]["private_poll"])
 
     def test_bot_on_another_platform_has_no_listen_list(self):
         response = self.post("/base/listen/list", bot=self.bot("lark_app", platform="lark"))

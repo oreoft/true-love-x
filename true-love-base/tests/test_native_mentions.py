@@ -1,5 +1,6 @@
 """Exercise real send_text behavior with only the Windows SDK boundary isolated."""
 
+import contextlib
 import importlib.util
 import sys
 import types
@@ -18,6 +19,8 @@ def load_client_class():
     for name, attributes in {
         "true_love_base.wxautox4x.wxautox4x": {"WeChat": object},
         "wxautox4.param": {"WxParam": type("WxParam", (), {})},
+        "wxautox4.uia.uiautomation": {"InitializeUIAutomationInCurrentThread": lambda: None},
+        "wxautox4.utils.lock": {"ui_transaction": lambda timeout=30.0: contextlib.nullcontext()},
         "true_love_common.chat_msg": {"ChatMsg": object},
         "true_love_base.models.message_converter": {"convert_message": None},
         "true_love_base.utils.path_resolver": {"get_wx_imgs_dir": lambda: None},

@@ -26,6 +26,7 @@ from true_love_base.utils.win_env import keep_awake
 # 初始化配置（会设置日志）
 config = Config()
 LOG = logging.getLogger("Main")
+REPLY_STYLE_NAMES = {"at": "@", "tickle": "拍一拍", "quote": "引用"}
 
 
 def disable_quick_edit():
@@ -136,6 +137,7 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
     success_chats = load_result["success"]
     failed_chats = load_result["failed"]
     unavailable = load_result["unavailable"]
+    settings = load_result.get("settings", {})
 
     if unavailable:
         LOG.error("Listen chats unavailable from server; not listening to any chat until the server restores them")
@@ -160,6 +162,10 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
 
         headline = "tl-base 重新连上微信" if reconnected else "tl-base 启动成功"
         startup_msg = f"{headline}\n\n当前监听列表 ({len(success_chats)}个):\n{success_list_str}"
+        styles = "、".join(REPLY_STYLE_NAMES.get(style, style) for style in settings.get("group_reply", []))
+        startup_msg += (f"\n\n私聊轮询：{'开' if settings.get('private_poll') else '关'}"
+                        f"\n自动通过好友申请：{'开' if settings.get('auto_accept_friends') else '关'}"
+                        f"\n群回复方式：{styles or '@'}")
         if failed_chats:
             startup_msg += f"\n\n监听失败 ({len(failed_chats)}个):\n{failed_list_str}"
         if unavailable:
