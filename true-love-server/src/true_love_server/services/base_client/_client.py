@@ -73,8 +73,11 @@ class BaseClient:
             return False, str(e)
 
     async def send_text(self, receiver: str, at_user: str, content: str,
-                        raise_on_error: bool = False) -> tuple[bool, str]:
+                        raise_on_error: bool = False, quote_msg_id: str = "") -> tuple[bool, str]:
+        """quote_msg_id: 要引用回复的消息 id，base 引用不了或平台不支持时照常发送"""
         payload = {"sendReceiver": receiver, "atReceiver": at_user, "content": content}
+        if quote_msg_id:
+            payload["quoteMsgId"] = quote_msg_id
         return await self._send("send_text", "/send/text", payload, raise_on_error=raise_on_error)
 
     async def send_file(self, url: str, receiver: str, raise_on_error: bool = False) -> tuple[bool, str]:

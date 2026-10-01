@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import time
+from collections import OrderedDict
 from datetime import datetime
 from threading import Lock, local
 from typing import Callable, Optional
@@ -42,6 +43,9 @@ MessageCallback = Callable[[ChatMsg, str], None]
 SEND_CONFIRM_SECONDS = 10
 # 自己发出的文件在监听里的消息类型
 _SELF_MEDIA_TYPES = {"image", "file", "video", "voice"}
+# 引用回复要拿着原消息在聊天窗口里的那个对象去点“引用”，所以收到的消息按 id 留一段时间
+QUOTE_KEEP_SECONDS = 600
+QUOTE_KEEP_COUNT = 500
 # 不转给 server 的消息：微信团队、系统提示、自己发的
 _IGNORED_ATTRS = {"weixin", "system", "self"}
 
@@ -88,6 +92,9 @@ class WxAutoClient():
         # 监听里看到的自己发出的文件：{聊天对象: [(时间, 类型, 内容)]}，只保留最近几条
         self._self_media: dict[str, list[tuple[float, str, str]]] = {}
         self._self_media_lock = Lock()
+        # 能被引用回复的消息：{消息 id: (收到的时间, 聊天对象, SDK 消息对象)}，按收到的先后排
+        self._quotable: OrderedDict[str, tuple[float, str, object]] = OrderedDict()
+        self._quotable_lock = Lock()
 
     def connect(self) -> bool:
         """连接已登录的微信主窗口；微信没开或没登录时返回 False，由调用方稍后重试"""
@@ -223,8 +230,16 @@ class WxAutoClient():
 
     # ==================== 消息发送 ====================
 
-    def send_text(self, receiver: str, content: str, at_list: Optional[list[str]] = None) -> bool:
-        """发送文本消息"""
+    def send_text(self, receiver: str, content: str, at_list: Optional[list[str]] = None,
+                  quote_msg_id: str = "") -> bool:
+        """
+        发送文本消息
+
+        Args:
+            quote_msg_id: 要引用回复的消息 id；原消息还在监听窗口里时引用它回复，否则照常发送
+        """
+        if quote_msg_id and self._send_quote(receiver, content, at_list, quote_msg_id):
+            return True
         try:
             LOG.debug(f"SendMsg content: {content[:50]}...")
             sub_window = self.wx.GetSubWindow(receiver)
@@ -237,6 +252,42 @@ class WxAutoClient():
         except Exception as e:
             LOG.error(f"Failed to send text to [{receiver}]: {e}")
             return False
+
+    def _send_quote(self, receiver: str, content: str, at_list: Optional[list[str]], msg_id: str) -> bool:
+        """引用原消息回复，引用不了时返回 False，由调用方照常发送"""
+        with self._quotable_lock:
+            entry = self._quotable.get(msg_id)
+        if entry is None or entry[1] != receiver or time.monotonic() - entry[0] > QUOTE_KEEP_SECONDS:
+            LOG.info("[Quote] [%s] message %s is no longer kept; sending without quoting", receiver, msg_id)
+            return False
+        raw_msg = entry[2]
+        try:
+            if not raw_msg.exists():
+                LOG.info("[Quote] [%s] message %s left the chat window; sending without quoting", receiver, msg_id)
+                return False
+            result = raw_msg.quote(content, at=at_list)
+        except Exception:
+            LOG.warning("[Quote] [%s] quoting message %s failed; sending without quoting", receiver, msg_id,
+                        exc_info=True)
+            return False
+        if not result:
+            LOG.warning("[Quote] [%s] quoting message %s failed: %s; sending without quoting",
+                        receiver, msg_id, result.get('message') if isinstance(result, dict) else result)
+            return False
+        LOG.info("[Quote] [%s] replied quoting message %s", receiver, msg_id)
+        return True
+
+    def _keep_quotable(self, chat_name: str, raw_msg) -> None:
+        msg_id = str(getattr(raw_msg, "id", "") or "")
+        if not msg_id:
+            return
+        now = time.monotonic()
+        with self._quotable_lock:
+            self._quotable[msg_id] = (now, chat_name, raw_msg)
+            self._quotable.move_to_end(msg_id)
+            while self._quotable and (len(self._quotable) > QUOTE_KEEP_COUNT
+                                      or now - next(iter(self._quotable.values()))[0] > QUOTE_KEEP_SECONDS):
+                self._quotable.popitem(last=False)
 
     _AUDIO_EXTS = (".wav", ".mp3")
 
@@ -375,6 +426,7 @@ class WxAutoClient():
                 LOG.info('------------ Raw message info ------------\n%s', self._dump_obj_attrs(raw_msg))
                 LOG.info('------------ Raw chat info ------------\n%s', self._dump_obj_attrs(chat))
 
+                self._keep_quotable(chat_name, raw_msg)
                 # 转换消息
                 message = convert_message(raw_msg, chat_name, bot_id=self._bot_id, bot_name=self._self_name)
                 LOG.info('Converted message: %r', message)

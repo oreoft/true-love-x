@@ -77,10 +77,12 @@ def notify_master_sync(content: str) -> bool:
     return result.get("code") == 0
 
 
-async def send_text(receiver: str, content: str, at_user: str = "") -> bool:
-    result = await _async_post("/action/send", {
-        "receiver": receiver, "content": content, "at_user": at_user,
-    })
+async def send_text(receiver: str, content: str, at_user: str = "", quote_msg_id: str = "") -> bool:
+    """quote_msg_id: 要引用回复的消息 id，引用不了时照常发送"""
+    payload = {"receiver": receiver, "content": content, "at_user": at_user}
+    if quote_msg_id:
+        payload["quote_msg_id"] = quote_msg_id
+    result = await _async_post("/action/send", payload)
     return result.get("code") == 0
 
 

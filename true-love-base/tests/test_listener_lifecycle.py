@@ -568,5 +568,49 @@ class ListenerLifecycleTests(unittest.TestCase):
         sessions["quiet"].select_option.assert_not_called()
         self.sdk.ChatWith.assert_called_once_with("gone", exact=True)
 
+    # ==================== 引用回复 ====================
+
+    def received(self, msg_id="m1", chat="group"):
+        raw = Mock(attr="friend", id=msg_id)
+        raw.exists.return_value = True
+        raw.quote.return_value = True
+        self.client._create_internal_callback(chat, Mock())(raw, object())
+        return raw
+
+    def test_reply_quotes_a_message_still_in_the_chat_window(self):
+        raw = self.received()
+
+        with self.assertLogs("WxAutoClient", level="INFO"):
+            self.assertTrue(self.client.send_text("group", "answer", ["alice"], "m1"))
+
+        raw.quote.assert_called_once_with("answer", at=["alice"])
+        self.sdk.SendMsg.assert_not_called()
+
+    def test_reply_is_sent_plainly_when_the_message_cannot_be_quoted(self):
+        cases = {
+            "unknown id": lambda raw: "other",
+            "other chat": lambda raw: self.client._quotable.update(m1=(0, "elsewhere", raw)) or "m1",
+            "scrolled away": lambda raw: setattr(raw.exists, "return_value", False) or "m1",
+            "quote failed": lambda raw: setattr(raw.quote, "return_value", False) or "m1",
+            "quote raised": lambda raw: setattr(raw.quote, "side_effect", RuntimeError("gone")) or "m1",
+        }
+        for name, prepare in cases.items():
+            with self.subTest(name):
+                self.sdk.SendMsg.reset_mock()
+                raw = self.received()
+                quote_id = prepare(raw)
+
+                with self.assertLogs("WxAutoClient", level="INFO"):
+                    self.assertTrue(self.client.send_text("group", "answer", ["alice"], quote_id))
+
+                self.sdk.SendMsg.assert_called_once_with("answer", "group", at=["alice"])
+
+    def test_only_recent_messages_are_kept_for_quoting(self):
+        for i in range(self.client_module.QUOTE_KEEP_COUNT + 5):
+            self.received(f"m{i}")
+
+        self.assertEqual(len(self.client._quotable), self.client_module.QUOTE_KEEP_COUNT)
+        self.assertNotIn("m0", self.client._quotable)
+
 if __name__ == "__main__":
     unittest.main()

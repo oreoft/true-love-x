@@ -38,10 +38,12 @@ class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         config = types.SimpleNamespace(http=types.SimpleNamespace(token=["token"]))
         self.posted = []
+        self.payloads = []
         self.agent = AnsweringAgent()
 
         async def post(url, payload, timeout=None):
             self.posted.append((url, payload.get("bot_id"), payload.get("receiver")))
+            self.payloads.append(payload)
             return accepted(url)
 
         for patcher in (
@@ -88,6 +90,14 @@ class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
             await self.trigger("alice", "wxid_ser")
 
         self.assertEqual(self.posted, [("http://server.test:8089/action/send", "wxid_ser", "alice")])
+
+    async def test_reply_names_the_message_it_quotes_only_when_there_is_one(self):
+        await server_client.send_text("room", "hi", "alice", "m1")
+        await server_client.send_text("alice", "hi")
+
+        self.assertEqual(self.payloads[0]["quote_msg_id"], "m1")
+        self.assertNotIn("quote_msg_id", self.payloads[1])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -73,6 +73,7 @@ async def send_text(request: dict[str, Any] | None = Body(default=None)) -> dict
         - is_master: 为 true 时发给这个号的管理员，忽略 sendReceiver（可选）
         - content: 消息内容
         - atReceiver: 要@的人（可选）
+        - quoteMsgId: 要引用回复的消息 id（可选）；原消息还在监听窗口里时引用回复，否则照常发送
 
     超过 2000 个字符时自动分批：在每批末尾 200 字符内寻找换行符切割，
     分批依次发送，仅第一批携带 @。
@@ -88,11 +89,12 @@ async def send_text(request: dict[str, Any] | None = Body(default=None)) -> dict
     receiver = _receiver(robot, data)
     content = data.get("content", "")
     at_receiver = data.get("atReceiver", "")
+    quote_msg_id = data.get("quoteMsgId", "")
 
     if not receiver or not content:
         return ApiErrors.INVALID_PARAMS.to_dict()
 
-    success = await _run_wx_operation(_send_text_operation, robot, receiver, content, at_receiver)
+    success = await _run_wx_operation(_send_text_operation, robot, receiver, content, at_receiver, quote_msg_id)
     if success:
         return ApiResponse.success().to_dict()
     return ApiErrors.SEND_FAILED.to_dict()
@@ -452,9 +454,10 @@ def serialize_result(result: Any) -> Any:
     return str(result)
 
 
-def _send_text_operation(robot: "Robot", receiver: str, content: str, at_receiver: str) -> bool:
+def _send_text_operation(robot: "Robot", receiver: str, content: str, at_receiver: str,
+                         quote_msg_id: str = "") -> bool:
     if len(content.encode("utf-8")) <= MAX_CHUNK_BYTES:
-        return robot.send_text_msg(content, receiver, at_receiver if at_receiver else None)
+        return robot.send_text_msg(content, receiver, at_receiver if at_receiver else None, quote_msg_id)
 
     chunks = split_long_text(content)
     LOG.info(
@@ -464,7 +467,7 @@ def _send_text_operation(robot: "Robot", receiver: str, content: str, at_receive
     )
     for idx, chunk in enumerate(chunks):
         mention = at_receiver if idx == 0 and at_receiver else None
-        ok = robot.send_text_msg(chunk, receiver, mention)
+        ok = robot.send_text_msg(chunk, receiver, mention, quote_msg_id if idx == 0 else "")
         if not ok:
             LOG.error("send_text: failed on chunk %d/%d to [%s]", idx + 1, len(chunks), receiver)
             return False

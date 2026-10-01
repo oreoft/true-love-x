@@ -53,7 +53,7 @@ class ForwardFailureReplyTests(unittest.TestCase):
 
         self.robot._process_message(ChatMsg(sender_id="alice"), "alice")
 
-        self.client.send_text.assert_called_once_with("alice", "server down", None)
+        self.client.send_text.assert_called_once_with("alice", "server down", None, "")
 
     def test_group_mention_gets_error_reply_that_mentions_sender(self):
         self.get_chat.return_value = "server down"
@@ -61,7 +61,7 @@ class ForwardFailureReplyTests(unittest.TestCase):
 
         self.robot._process_message(msg, "room")
 
-        self.client.send_text.assert_called_once_with("room", "server down", ["alice"])
+        self.client.send_text.assert_called_once_with("room", "server down", ["alice"], "")
 
     def test_plain_group_message_stays_silent_when_server_rejects(self):
         self.get_chat.return_value = "server down"

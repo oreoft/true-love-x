@@ -286,7 +286,8 @@ class Robot:
 
     # ==================== 消息发送 ====================
 
-    def send_text_msg(self, msg: str, receiver: str, at_user: Optional[str] = None) -> bool:
+    def send_text_msg(self, msg: str, receiver: str, at_user: Optional[str] = None,
+                      quote_msg_id: str = "") -> bool:
         """
         发送文本消息
         
@@ -294,6 +295,7 @@ class Robot:
             msg: 消息内容
             receiver: 接收者
             at_user: 要@的用户（可选）
+            quote_msg_id: 要引用回复的消息 id（可选），引用不了时照常发送
             
         Returns:
             是否发送成功
@@ -303,7 +305,7 @@ class Robot:
 
         at_list = [at_user] if at_user else None
         self.LOG.info(f"Sending to [{receiver}]: {msg[:50]}...")
-        return self.client.send_text(receiver, msg, at_list)
+        return self.client.send_text(receiver, msg, at_list, quote_msg_id)
 
     def send_file_msg(self, path: str, receiver: str) -> bool:
         """

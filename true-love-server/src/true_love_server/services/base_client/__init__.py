@@ -46,9 +46,10 @@ def wechat(bot_id: str) -> WeChatClient:
 # ==================== 所有平台通用的快捷函数，出错时返回 (False, 原因)，不抛异常 ====================
 
 async def send_text(bot_id: str, receiver: str, at_user: str, content: str,
-                    raise_on_error: bool = False) -> tuple[bool, str]:
+                    raise_on_error: bool = False, quote_msg_id: str = "") -> tuple[bool, str]:
     try:
-        return await for_bot(bot_id).send_text(receiver, at_user, content, raise_on_error=raise_on_error)
+        return await for_bot(bot_id).send_text(receiver, at_user, content, raise_on_error=raise_on_error,
+                                               quote_msg_id=quote_msg_id)
     except Exception as e:
         if raise_on_error:
             raise

@@ -61,6 +61,8 @@ class AgentLoop:
         session_id = f"{bot_id}:{_session_base}"
         at_user = sender_id if is_group else ""
         receiver = chat_id if is_group else sender_id
+        # 群里的回复引用原消息，群聊得快时也看得出回的是哪句
+        quote_msg_id = msg.msg_id if is_group else ""
 
         LOG.info("AgentLoop.run: bot_id=%s platform=%s sender_id=%s sender_name=%s session=%s type=%s",
                  bot_id, platform, sender_id, sender_name, session_id, msg_type)
@@ -69,7 +71,7 @@ class AgentLoop:
         user_content = self._build_user_content(msg)
         if not user_content:
             LOG.warning("无法解析消息内容，跳过: type=%s", msg_type)
-            await self._send_reply(receiver, "抱歉，这种消息我暂时还不太看得懂呢~", at_user)
+            await self._send_reply(receiver, "抱歉，这种消息我暂时还不太看得懂呢~", at_user, quote_msg_id)
             return
 
         # 获取用户画像并注入 session
@@ -150,7 +152,7 @@ class AgentLoop:
 
         if reply:
             session.add_message("assistant", reply)
-            await self._send_reply(receiver, reply, at_user)
+            await self._send_reply(receiver, reply, at_user, quote_msg_id)
 
     def _build_user_content(self, msg: ChatMsg) -> Optional[str]:
         """把各类消息类型转换为 LLM 可理解的文本"""
@@ -273,11 +275,11 @@ class AgentLoop:
             LOG.exception("tool %s 执行异常: %s", name, e)
             return f"[执行失败] {e}"
 
-    async def _send_reply(self, receiver: str, content: str, at_user: str) -> None:
+    async def _send_reply(self, receiver: str, content: str, at_user: str, quote_msg_id: str = "") -> None:
         """通过 Server 发送最终回复"""
         from true_love_ai.agent.server_client import send_text
         try:
-            ok = await send_text(receiver, content, at_user)
+            ok = await send_text(receiver, content, at_user, quote_msg_id)
             if not ok:
                 LOG.error("发送回复失败: receiver=%s", receiver)
         except Exception as e:
