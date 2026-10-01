@@ -16,12 +16,13 @@ class EmptyReplyTests(unittest.IsolatedAsyncioTestCase):
         session = types.SimpleNamespace(add_message=lambda *a: None, get_messages_for_llm=lambda access: [])
         loop.session_manager = types.SimpleNamespace(get_or_create=lambda *a, **k: session)
         loop._send_reply = AsyncMock()
-        msg = ChatMsg(bot_id="bot_a", platform="wechat", chat_id="room", sender_id="alice", is_group=True, content="hi")
+        msg = ChatMsg(bot_id="bot_a", platform="wechat", chat_id="room", sender_id="alice", is_group=True, is_at_me=True,
+                      content="hi")
         with patch.object(agent_loop, "get_user_context", return_value=None), \
                 patch.object(agent_loop.skill_registry, "get_all_tool_schemas", return_value=[]), \
                 patch.object(agent_loop.skill_registry, "get_notify", return_value=None), \
                 patch.object(agent_loop.skill_registry, "execute", AsyncMock(return_value="时区已经记下啦")):
-            with self.assertLogs("AgentLoop", level="WARNING"):
+            with self.assertLogs("Outcome", level="WARNING"):
                 await loop.run(msg)
         return loop._send_reply.await_args.args[1]
 

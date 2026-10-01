@@ -24,7 +24,8 @@ from true_love_common.chat_msg import ChatMsg
 from true_love_ai.core.session import get_session_manager
 from true_love_ai.llm.router import get_llm_router
 from true_love_ai.memory.memory_manager import get_user_context
-from true_love_ai.agent import link_reader, skill_registry
+from true_love_ai.agent import link_reader, outcome, skill_registry
+from true_love_ai.agent.outcome import Ending, Outcome
 
 LOG = logging.getLogger("AgentLoop")
 
@@ -32,6 +33,14 @@ LOG = logging.getLogger("AgentLoop")
 MAX_TOOL_ITERATIONS = 6
 # 单个 skill 执行超时（秒）
 SKILL_TIMEOUT_SECONDS = 300
+# 自动触发时附在这条消息后面（只给这一次调用，不进会话历史），让模型没话说时可以不回
+AUTO_REPLY_RULE = (
+    "（系统提示：上面这条没人叫你，是你在群里自己刷到的，群里的人并不期待你说话。"
+    f"默认只回复 {outcome.SKIP_MARKER}。"
+    "只有你真的能说出让人眼前一亮的东西才开口：好笑的吐槽或梗、对方可能不知道的有用信息、指出明显的错误或谣言。"
+    "复述或描述内容（比如“图上是一个人在健身”“这张图讲的是…”）、泛泛的建议和提醒、为了接话而接话，都不算，"
+    f"这些情况一律只回复 {outcome.SKIP_MARKER}，不要加别的字。）"
+)
 # 图片、文件消息没带用户自己的话时，替用户提的要求
 IMAGE_REQUEST = "请看看这张图片，说说上面是什么内容"
 FILE_REQUEST = "请看看这个文件，说说主要内容"
@@ -59,6 +68,13 @@ def is_auto_triggered(msg: ChatMsg) -> bool:
     return msg.is_group and not msg.is_at_me
 
 
+def _route(msg: ChatMsg) -> tuple[str, str, str]:
+    """回复发给谁：(接收者, 要 @ 的人, 回的是哪条消息)；群里回复带上原消息，base 按设置 @、拍一拍或引用对方"""
+    if msg.is_group:
+        return msg.chat_id, msg.sender_id, msg.msg_id
+    return msg.sender_id, "", ""
+
+
 def _clean_content(content: str, mention: str = "") -> str:
     """去掉正文里叫机器人的那段文字；是哪段文字由 base 识别后随消息带来"""
     if mention:
@@ -74,49 +90,51 @@ class AgentLoop:
         self.session_manager = get_session_manager()
 
     async def run(self, msg: ChatMsg) -> None:
-        platform = msg.platform
-        bot_id = msg.bot_id
-        sender_id = msg.sender_id
-        sender_name = msg.sender_name or sender_id
-        chat_id = msg.chat_id
-        is_group = msg.is_group
-        msg_type = msg.msg_type
-
+        """处理一条消息：_think 得出结局，finish 统一收尾"""
         # 会话按机器人隔离：同名的群在不同的号里是不同的会话；用户画像跟着会话走（每个群一份、私聊一份）
-        _session_base = chat_id if is_group else sender_id
-        session_id = f"{bot_id}:{_session_base}"
-        at_user = sender_id if is_group else ""
-        receiver = chat_id if is_group else sender_id
-        # 群里的回复带上原消息，base 按设置 @、拍一拍或引用对方
-        reply_msg_id = msg.msg_id if is_group else ""
-        # 没人叫它、自动接话时不发技能的"正在…"提示，免得群里一张图刷两条
-        notify = not is_auto_triggered(msg)
+        session_chat = msg.chat_id if msg.is_group else msg.sender_id
+        session_id = f"{msg.bot_id}:{session_chat}"
+        receiver, at_user, _ = _route(msg)
+        auto = is_auto_triggered(msg)
 
-        LOG.info("AgentLoop.run: bot_id=%s platform=%s sender_id=%s sender_name=%s session=%s type=%s",
-                 bot_id, platform, sender_id, sender_name, session_id, msg_type)
+        LOG.info("AgentLoop.run: bot_id=%s platform=%s sender_id=%s sender_name=%s session=%s type=%s auto=%s",
+                 msg.bot_id, msg.platform, msg.sender_id, msg.sender_name or msg.sender_id, session_id,
+                 msg.msg_type, auto)
+
+        # 没人叫它、自动接话时不发技能的"正在…"提示，免得群里一张图刷两条
+        ending, session = await self._think(msg, session_id, session_chat, receiver, at_user,
+                                            notify=not auto, auto=auto)
+        await self.finish(msg, ending, session)
+
+    async def _think(self, msg: ChatMsg, session_id: str, session_chat: str, receiver: str, at_user: str,
+                     notify: bool, auto: bool):
+        """跑一遍 LLM + 技能循环，返回 (结局, 会话)；不发任何消息，发不发、发什么由 finish 统一决定"""
+        platform, bot_id, sender_id = msg.platform, msg.bot_id, msg.sender_id
+        sender_name = msg.sender_name or sender_id
+        is_group = msg.is_group
 
         # 构建用户侧消息内容
         user_content = self._build_user_content(msg)
         if not user_content:
-            LOG.warning("无法解析消息内容，跳过: type=%s", msg_type)
-            await self._send_reply(receiver, "抱歉，这种消息我暂时还不太看得懂呢~", at_user, reply_msg_id)
-            return
+            return Ending(Outcome.UNREADABLE), None
 
         # 获取用户画像并注入 session
         user_ctx = get_user_context(session_id, sender_id)
         # 人设按"这个机器人里的这个群或人"选，名字用 base 带来的昵称
         session = self.session_manager.get_or_create(session_id, user_ctx=user_ctx, bot_id=bot_id,
-                                                     chat=_session_base, bot_name=msg.bot_name)
+                                                     chat=session_chat, bot_name=msg.bot_name)
         session.add_message("user", user_content)
 
         # 获取当前用户在这里有权限使用的 tools（权限点按平台、号、群、人匹配）
         access = {"platform": platform, "bot_id": bot_id, "sender_id": sender_id, "is_group": is_group,
-                  "chat": chat_id if is_group else ""}
+                  "chat": msg.chat_id if is_group else ""}
         tools = skill_registry.get_all_tool_schemas(access)
 
         # 开始 Agent Loop
         messages = session.get_messages_for_llm(access)
-        reply = None
+        if auto:
+            # 只告诉这一次调用，不写进会话历史
+            messages = [*messages, {"role": "user", "content": AUTO_REPLY_RULE}]
         last_tool_result = ""
 
         for iteration in range(MAX_TOOL_ITERATIONS):
@@ -127,17 +145,10 @@ class AgentLoop:
                 )
             except Exception as e:
                 LOG.exception("LLM 调用失败 (iteration=%d): %s", iteration, e)
-                reply = "呜呜~出了点小状况，稍后再试试吧~"
-                break
+                return Ending(Outcome.LLM_ERROR, detail=repr(e)[:200]), session
 
             if result_type == "text":
-                reply = result
-                # 模型调完技能偶尔只回空文本，用户就什么也收不到；这时把技能自己的结果发出去
-                if not (reply or "").strip():
-                    LOG.warning("LLM 返回空回复 (iteration=%d)，%s", iteration,
-                                "改发技能结果" if last_tool_result else "改发兜底回复")
-                    reply = last_tool_result or "嗯嗯，收到啦~"
-                break
+                return outcome.from_model_reply(result, last_tool_result, auto), session
 
             # result_type == "tool_calls"
             tool_calls = result
@@ -173,14 +184,25 @@ class AgentLoop:
                     "tool_call_id": tc["id"],
                     "content": tool_result,
                 })
-        else:
-            # 超出最大轮次
-            LOG.warning("AgentLoop 超过最大迭代次数 (%d)", MAX_TOOL_ITERATIONS)
-            reply = "处理超时了，稍后再试试吧~"
 
-        if reply:
-            session.add_message("assistant", reply)
-            await self._send_reply(receiver, reply, at_user, reply_msg_id)
+        LOG.warning("AgentLoop 超过最大迭代次数 (%d)", MAX_TOOL_ITERATIONS)
+        return Ending(Outcome.TOO_MANY_ROUNDS), session
+
+    async def finish(self, msg: ChatMsg, ending: Ending, session=None) -> None:
+        """
+        一条消息的唯一收口：按结局决定发不发、发什么，打一行"回复结局"日志
+
+        发出去的话记进会话历史；没发的（不回、自动触发时的各种兜底）不记。
+        """
+        auto = is_auto_triggered(msg)
+        text = outcome.text_to_send(ending, auto)
+        if text:
+            if session is not None:
+                session.add_message("assistant", text)
+            receiver, at_user, reply_msg_id = _route(msg)
+            await self._send_reply(receiver, text, at_user, reply_msg_id)
+        outcome.log_outcome(ending, bot_id=msg.bot_id, chat_id=msg.chat_id, sender_id=msg.sender_id,
+                            msg_type=msg.msg_type, auto=auto, sent=bool(text))
 
     def _build_user_content(self, msg: ChatMsg) -> Optional[str]:
         """把各类消息类型转换为 LLM 可理解的文本"""

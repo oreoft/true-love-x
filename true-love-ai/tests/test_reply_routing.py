@@ -10,7 +10,7 @@ from fastapi import BackgroundTasks
 from true_love_common.chat_msg import ChatMsg
 from true_love_common.http.client import HttpResult
 
-from true_love_ai.agent import server_client
+from true_love_ai.agent import agent_loop, server_client
 from true_love_ai.api import trigger_routes
 
 
@@ -22,7 +22,12 @@ class AnsweringAgent:
         await server_client.send_text(msg.sender_id, "hi")
 
 
-class CrashingAgent:
+class CrashingAgent(agent_loop.AgentLoop):
+    """Crashes while thinking; the real finish still tells the user"""
+
+    def __init__(self):
+        pass
+
     async def run(self, msg):
         raise RuntimeError("llm exploded")
 

@@ -42,23 +42,15 @@ async def trigger(request: dict, background_tasks: BackgroundTasks):
 
 
 async def _run_agent(msg: ChatMsg) -> None:
+    from true_love_ai.agent.agent_loop import get_agent_loop
+    from true_love_ai.agent.outcome import Ending, Outcome
     from true_love_ai.agent.server_client import replying_for
     with replying_for(msg.bot_id):
         try:
-            from true_love_ai.agent.agent_loop import get_agent_loop
             await get_agent_loop().run(msg)
         except Exception as e:
             LOG.exception("Agent Loop 执行异常: sender_id=%s, err=%s", msg.sender_id, e)
-            await _send_fallback(msg)
-
-
-async def _send_fallback(msg: ChatMsg) -> None:
-    try:
-        receiver = msg.chat_id if msg.is_group else msg.sender_id
-        at_user = msg.sender_id if msg.is_group else ""
-        if not receiver:
-            return
-        from true_love_ai.agent.server_client import send_text
-        await send_text(receiver, "啊哦~处理消息时出了点问题，稍后再试试捏~", at_user)
-    except Exception as ex:
-        LOG.error("发送兜底消息失败: %s", ex)
+            try:
+                await get_agent_loop().finish(msg, Ending(Outcome.CRASHED, detail=repr(e)[:200]))
+            except Exception as ex:
+                LOG.error("收尾失败: %s", ex)
