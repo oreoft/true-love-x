@@ -1,7 +1,7 @@
 /**
  * 监听管理（微信专属），分两个标签：
  * - 监听：看每个监听是否健康，测活、重置、移除、添加
- * - 微信设置：私聊轮询（和一键群免打扰）、自动通过好友申请、群里不 @ 也交给 AI 的消息、群回复方式
+ * - 微信设置：私聊轮询（和一键群免打扰）、自动通过好友申请、群里不 @ 也交给 AI 的消息和它们的疲劳限制、群回复方式
  *
  * 这些操作都要调 base，base 离线时按钮变灰；设置离线时也能改，base 下次连上微信时生效。
  */
@@ -14,9 +14,13 @@ import { offlineBanner } from './schedule.js';
 const SWITCHES = [
     ['private_poll', '私聊轮询', '没开子窗口的私聊靠主窗口红点来收；群要设成免打扰，轮询才不会点开它们'],
     ['auto_accept_friends', '自动通过好友申请', '每两分钟看一次新朋友，有申请就通过，并告诉管理员通过了谁'],
-    ['auto_ai_link', '群链接自动交给 AI', '群里有人发公众号、小红书等链接，不用 @ 也会去读内容并回复；取不到链接地址时不回'],
-    ['auto_ai_file', '群文件自动交给 AI', '群里有人发文件，不用 @ 也会去读并回复；文件没下载下来时不回'],
-    ['auto_ai_note', '群笔记自动交给 AI', '群里有人发文字笔记，不用 @ 也会回复；只有图片的笔记读不到内容，不回'],
+];
+// 群里不 @ 也交给 AI 的消息：[类型, 名称, 说明]；每种有自己的开关和疲劳限制（同一个群里每 x 秒最多 y 条）
+const AUTO_AI = [
+    ['link', '链接', '公众号、小红书等链接，会去读正文再回复；取不到链接地址时不回'],
+    ['file', 'PDF', '只管 PDF，别的文件 AI 读不了；文件没下载下来时不回'],
+    ['image', '图片', '只管图片，表情包不算'],
+    ['note', '笔记', '文字笔记；只有图片的笔记读不到内容，不回'],
 ];
 // 群回复方式：[值, 名称]，勾几个就在其中随机挑
 const REPLY_STYLES = [['at', '@ 回复'], ['tickle', '拍一拍'], ['quote', '引用回复']];
@@ -92,6 +96,19 @@ export async function show(root, ctx) {
             <button class="btn sm" data-switch="${key}">${settings[key] ? '关闭' : '打开'}</button>
             ${key === 'private_poll' ? `<button class="btn sm" id="muteGroups" ${disabled}>一键群免打扰</button>` : ''}
         </div>`).join('')}
+        ${AUTO_AI.map(([kind, label, hint]) => {
+            const on = settings[`auto_ai_${kind}`];
+            const limit = settings[`auto_ai_${kind}_limit`] || { count: 5, seconds: 600 };
+            return `
+        <div class="listen-settings">
+            <span>群${label}自动交给 AI <span class="pill ${on ? 'ok' : ''}">${on ? '开' : '关'}</span></span>
+            <span class="muted grow">${hint}</span>
+            <label>每 <input type="number" min="1" step="1" style="width:5em" data-limit-seconds="${kind}" value="${limit.seconds}"> 秒最多
+                <input type="number" min="1" step="1" style="width:4em" data-limit-count="${kind}" value="${limit.count}"> 条</label>
+            <button class="btn sm" data-save-limit="${kind}">保存限制</button>
+            <button class="btn sm" data-auto-ai="${kind}">${on ? '关闭' : '打开'}</button>
+        </div>`;
+        }).join('')}
         <div class="listen-settings">
             <span>群回复方式</span>
             ${REPLY_STYLES.map(([value, label]) => `<label><input type="checkbox" data-reply="${value}"
@@ -156,6 +173,32 @@ export async function show(root, ctx) {
                     const state = result.settings[key] ? '打开' : '关闭';
                     toast(result.applied ? `${label}已${state}` : `${label}已${state}，base 下次连上微信时生效`);
                 }
+                reloadSettings();
+            };
+        });
+        $$('[data-auto-ai]', root).forEach((el) => {
+            const kind = el.dataset.autoAi;
+            const [, label] = AUTO_AI.find(([name]) => name === kind);
+            el.onclick = async () => {
+                const key = `auto_ai_${kind}`;
+                const result = await busy(el, '保存中…', () => attempt(() => api.listenSaveSettings({ [key]: !settings[key] })));
+                if (result) toast(`群${label}自动交给 AI 已${result.settings[key] ? '打开' : '关闭'}`);
+                reloadSettings();
+            };
+        });
+        $$('[data-save-limit]', root).forEach((el) => {
+            const kind = el.dataset.saveLimit;
+            const [, label] = AUTO_AI.find(([name]) => name === kind);
+            el.onclick = async () => {
+                const seconds = Number($(`[data-limit-seconds="${kind}"]`, root).value);
+                const count = Number($(`[data-limit-count="${kind}"]`, root).value);
+                if (!Number.isInteger(seconds) || !Number.isInteger(count) || seconds < 1 || count < 1) {
+                    toast('秒数和条数都要是正整数', 'error');
+                    return;
+                }
+                const result = await busy(el, '保存中…',
+                    () => attempt(() => api.listenSaveSettings({ [`auto_ai_${kind}_limit`]: { count, seconds } })));
+                if (result) toast(`群${label}：同一个群每 ${seconds} 秒最多自动回 ${count} 条`);
                 reloadSettings();
             };
         });

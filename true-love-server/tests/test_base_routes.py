@@ -84,42 +84,65 @@ class OnMessageTests(ServerCase):
         self.assertEqual(self.ai_calls, [])
         self.assertEqual(len(self.messages("wxid_m8s")), 1)
 
-    def test_group_link_file_and_note_go_to_ai_only_when_switched_on(self):
-        link = message(msg_id="link", msg_type="link", link_msg={"url": "https://mp.weixin.qq.com/s/x"})
-        file = message(msg_id="file", msg_type="file",
-                       file_msg={"file_name": "a.pdf", "resource": {"ref": "wx_imgs/a.pdf", "source": "local"}})
-        note = message(msg_id="note", msg_type="note", content="笔记玩AI最后就是玩数据中心")
-        self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=link)
+    def switch_on(self, bot_id, *kinds):
+        self.register(bot_id)
+        for kind in kinds:
+            bot_settings.set_bool(bot_id, f"auto_ai_{kind}", True)
+
+    def test_group_link_pdf_image_and_note_go_to_ai_only_when_switched_on(self):
+        msgs = [message(msg_id="link", msg_type="link", link_msg={"url": "https://mp.weixin.qq.com/s/x"}),
+                message(msg_id="pdf", msg_type="file",
+                        file_msg={"file_name": "a.pdf", "resource": {"ref": "wx_imgs/a.pdf", "source": "local"}}),
+                message(msg_id="image", msg_type="image", image_msg={"resource": {"ref": "wx_imgs/a.jpg"}}),
+                message(msg_id="note", msg_type="note", content="笔记玩AI最后就是玩数据中心")]
+        for msg in msgs:
+            self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=msg)
         self.assertEqual(self.ai_calls, [])
 
-        for key in bot_settings.AUTO_AI_SWITCHES:
-            bot_settings.set_bool("wxid_m8s", key, True)
-        for msg in (dict(link, msg_id="link2"), file, note):
-            self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=msg)
+        self.switch_on("wxid_m8s", *bot_settings.AUTO_AI_TYPES)
+        for msg in msgs:
+            self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=dict(msg, msg_id=msg["msg_id"] + "2"))
 
-        self.assertEqual([payload["msg"]["msg_type"] for _, payload in self.ai_calls], ["link", "file", "note"])
+        self.assertEqual([payload["msg"]["msg_type"] for _, payload in self.ai_calls], ["link", "file", "image", "note"])
 
     def test_auto_ai_skips_messages_with_nothing_to_read(self):
-        self.register("wxid_m8s")
-        for key in bot_settings.AUTO_AI_SWITCHES:
-            bot_settings.set_bool("wxid_m8s", key, True)
+        self.switch_on("wxid_m8s", *bot_settings.AUTO_AI_TYPES)
 
         for msg in (message(msg_id="1", msg_type="link", link_msg={"url": None}),
                     message(msg_id="2", msg_type="file", file_msg={"file_name": "a.pdf"}),
-                    message(msg_id="3", msg_type="note", content="笔记"),
-                    message(msg_id="4", msg_type="image")):
+                    message(msg_id="3", msg_type="file",
+                            file_msg={"file_name": "a.docx", "resource": {"ref": "wx_imgs/a.docx"}}),
+                    message(msg_id="4", msg_type="image"),
+                    message(msg_id="5", msg_type="note", content="笔记"),
+                    message(msg_id="6", msg_type="emotion", content="[动画表情]")):
             self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=msg)
 
         self.assertEqual(self.ai_calls, [])
 
     def test_each_switch_only_covers_its_own_type(self):
-        self.register("wxid_m8s")
-        bot_settings.set_bool("wxid_m8s", bot_settings.AUTO_AI_FILE, True)
+        self.switch_on("wxid_m8s", "file")
 
         self.post("/base/on-message", bot=self.bot("wxid_m8s"),
                   msg=message(msg_type="link", link_msg={"url": "https://mp.weixin.qq.com/s/x"}))
 
         self.assertEqual(self.ai_calls, [])
+
+    def test_each_type_has_its_own_limit_in_each_group(self):
+        self.switch_on("wxid_m8s", "image", "link")
+        bot_settings.set_limit("wxid_m8s", "auto_ai_image_limit", {"count": 2, "seconds": 600})
+
+        for i in range(3):
+            self.post("/base/on-message", bot=self.bot("wxid_m8s"),
+                      msg=message(msg_id=f"img{i}", sender_id=f"user{i}", msg_type="image",
+                                  image_msg={"resource": {"ref": f"wx_imgs/{i}.jpg"}}))
+        self.post("/base/on-message", bot=self.bot("wxid_m8s"),
+                  msg=message(msg_id="img-b", chat_id="群B", msg_type="image", image_msg={"resource": {"ref": "wx_imgs/b.jpg"}}))
+        self.post("/base/on-message", bot=self.bot("wxid_m8s"),
+                  msg=message(msg_id="link", msg_type="link", link_msg={"url": "https://mp.weixin.qq.com/s/x"}))
+
+        sent = [(payload["msg"]["chat_id"], payload["msg"]["msg_type"]) for _, payload in self.ai_calls]
+        self.assertEqual(sent, [("群A", "image"), ("群A", "image"), ("群B", "image"), ("群A", "link")])
+        self.assertEqual(len(self.messages("wxid_m8s")), 4)
 
     def test_media_is_handed_to_ai_as_a_url_on_the_base_that_received_it(self):
         self.post("/base/on-message", bot=self.bot("wxid_ser", callback="http://100.64.0.9:5000"),

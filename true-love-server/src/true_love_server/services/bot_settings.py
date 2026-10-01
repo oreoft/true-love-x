@@ -8,10 +8,9 @@ Bot Settings - 机器人设置
 - auto_accept_friends：自动通过好友申请
 - group_reply：群回复方式，at / tickle（拍一拍）/ quote（引用）里勾一个或多个，多个时随机挑
 
-群里不 @ 也交给 AI 的开关（AUTO_AI_SWITCHES）只有 server 用，不发给 base：
-- auto_ai_link：链接（公众号、小红书等）
-- auto_ai_file：文件
-- auto_ai_note：笔记
+群里不 @ 也交给 AI 的设置只有 server 用，不发给 base。每种消息一个开关、一个疲劳限制：
+- auto_ai_<类型>：开关，类型见 AUTO_AI_TYPES（链接、PDF 文件、图片、笔记）
+- auto_ai_<类型>_limit：{"count": 条数, "seconds": 秒数}，同一个群里这种消息每 seconds 秒最多自动交给 AI count 条
 """
 
 import logging
@@ -26,10 +25,10 @@ AUTO_ACCEPT_FRIENDS = "auto_accept_friends"
 WECHAT_SWITCHES = (PRIVATE_POLL, AUTO_ACCEPT_FRIENDS)
 GROUP_REPLY = "group_reply"
 REPLY_STYLES = ("at", "tickle", "quote")
-AUTO_AI_LINK = "auto_ai_link"
-AUTO_AI_FILE = "auto_ai_file"
-AUTO_AI_NOTE = "auto_ai_note"
-AUTO_AI_SWITCHES = (AUTO_AI_LINK, AUTO_AI_FILE, AUTO_AI_NOTE)
+AUTO_AI_TYPES = ("link", "file", "image", "note")
+AUTO_AI_SWITCHES = tuple(f"auto_ai_{kind}" for kind in AUTO_AI_TYPES)
+AUTO_AI_LIMITS = tuple(f"auto_ai_{kind}_limit" for kind in AUTO_AI_TYPES)
+DEFAULT_AUTO_AI_LIMIT = {"count": 5, "seconds": 600}
 
 
 def get_bool(bot_id: str, key: str, default: bool = False) -> bool:
@@ -50,14 +49,32 @@ def wechat_settings(bot_id: str) -> dict:
             GROUP_REPLY: get_list(bot_id, GROUP_REPLY, ["at"])}
 
 
+def get_limit(bot_id: str, key: str) -> dict:
+    """疲劳限制，存的是"条数,秒数"，没设过用 DEFAULT_AUTO_AI_LIMIT"""
+    with bot_session(bot_id) as db:
+        row = db.get(BotSetting, key)
+    try:
+        count, seconds = (int(part) for part in row.value.split(","))
+        return {"count": count, "seconds": seconds}
+    except (AttributeError, ValueError):
+        return dict(DEFAULT_AUTO_AI_LIMIT)
+
+
 def admin_settings(bot_id: str) -> dict:
-    """后台看到的全部设置：微信设置加上群里自动交给 AI 的开关"""
-    return {**wechat_settings(bot_id), **{key: get_bool(bot_id, key) for key in AUTO_AI_SWITCHES}}
+    """后台看到的全部设置：微信设置加上群里自动交给 AI 的开关和疲劳限制"""
+    return {**wechat_settings(bot_id),
+            **{key: get_bool(bot_id, key) for key in AUTO_AI_SWITCHES},
+            **{key: get_limit(bot_id, key) for key in AUTO_AI_LIMITS}}
 
 
 def set_bool(bot_id: str, key: str, value: bool) -> None:
     _set(bot_id, key, _text(value))
     LOG.info("Bot [%s] setting %s = %s", bot_id, key, value)
+
+
+def set_limit(bot_id: str, key: str, limit: dict) -> None:
+    _set(bot_id, key, f"{limit['count']},{limit['seconds']}")
+    LOG.info("Bot [%s] setting %s = %s", bot_id, key, limit)
 
 
 def set_list(bot_id: str, key: str, values: list[str]) -> None:

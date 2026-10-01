@@ -3,7 +3,7 @@
 Message Service - base 转来的消息
 
 所有消息存进机器人自己的库；@ 机器人或私聊的消息交给 AI，同一个人找得太频繁时只入库（见 ai_rate_limit）。
-群里的链接、文件、笔记在后台开了对应开关时，不 @ 也交给 AI（见 bot_settings.AUTO_AI_SWITCHES）。
+群里的链接、PDF、图片、笔记在后台开了对应开关时，不 @ 也交给 AI，每种有自己的疲劳限制（见 auto_ai_limit）。
 AI 没接住时由 server 直接回一句，免得用户以为机器人假死。
 """
 
@@ -13,7 +13,7 @@ import logging
 from true_love_common.chat_msg import ChatMsg
 from true_love_common.media import attach_urls
 
-from . import ai_rate_limit, base_client, bot_settings
+from . import ai_rate_limit, auto_ai_limit, base_client, bot_settings
 from .ai_client import business as ai
 from .bot_registry import BotRecord
 from .group_message_repository import GroupMessageRepository
@@ -49,17 +49,33 @@ async def handle_incoming(bot: BotRecord, msg: ChatMsg) -> None:
 
 
 def _auto_ai(bot_id: str, msg: ChatMsg) -> bool:
-    """群里没 @ 的消息，按开关决定要不要交给 AI；没内容可看的不交（取不到地址的链接、没下载下来的文件、只有图的笔记）"""
-    if msg.msg_type == "link":
-        key, has_content = bot_settings.AUTO_AI_LINK, bool(msg.link_msg and msg.link_msg.url)
-    elif msg.msg_type == "file":
-        key, has_content = bot_settings.AUTO_AI_FILE, bool(msg.file_msg and msg.file_msg.resource)
-    elif msg.msg_type == "note":
+    """
+    群里没 @ 的消息，按开关和疲劳限制决定要不要交给 AI
+
+    没内容可看的不交：取不到地址的链接、不是 PDF 或没下载下来的文件（AI 只读得了 PDF）、
+    没下载下来的图片、只有图的笔记。表情包是单独的 emotion 类型，不在这里。
+    """
+    kind = msg.msg_type
+    if kind == "link":
+        has_content = bool(msg.link_msg and msg.link_msg.url)
+    elif kind == "file":
+        resource = msg.file_msg.resource if msg.file_msg else None
+        has_content = bool(resource and resource.ref.lower().endswith(".pdf"))
+    elif kind == "image":
+        has_content = bool(msg.image_msg and msg.image_msg.resource)
+    elif kind == "note":
         # 群里的笔记 base 不点开，文字笔记的 content 是"笔记"加正文，只有图的笔记就只有"笔记"两个字
-        key, has_content = bot_settings.AUTO_AI_NOTE, (msg.content or "").strip() not in ("", "笔记")
+        has_content = (msg.content or "").strip() not in ("", "笔记")
     else:
         return False
-    return has_content and bot_settings.get_bool(bot_id, key)
+    if not has_content or not bot_settings.get_bool(bot_id, f"auto_ai_{kind}"):
+        return False
+    limit = bot_settings.get_limit(bot_id, f"auto_ai_{kind}_limit")
+    if not auto_ai_limit.allow(bot_id, msg.chat_id, kind, limit["count"], limit["seconds"]):
+        LOG.info("群里自动交给 AI 太频繁，只入库: bot_id=%s chat=%s type=%s limit=%s",
+                 bot_id, msg.chat_id, kind, limit)
+        return False
+    return True
 
 
 def _save_message(bot_id: str, msg: ChatMsg) -> bool:

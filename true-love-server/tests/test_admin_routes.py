@@ -151,9 +151,9 @@ class ListenPageTests(ServerCase):
 
         data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, auto_accept_friends=True)["data"]
 
-        self.assertEqual(data, {"settings": {"private_poll": False, "auto_accept_friends": True, "group_reply": ["at"],
-                                             "auto_ai_link": False, "auto_ai_file": False, "auto_ai_note": False},
-                                "applied": True})
+        self.assertEqual(data["applied"], True)
+        self.assertEqual({key: data["settings"][key] for key in ("private_poll", "auto_accept_friends", "group_reply")},
+                         {"private_poll": False, "auto_accept_friends": True, "group_reply": ["at"]})
         self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["auto_accept_friends"])
         [(url, payload)] = self.bases.sent()
         self.assertEqual((url, payload), (f"{callback}/settings", {"auto_accept_friends": True}))
@@ -174,10 +174,21 @@ class ListenPageTests(ServerCase):
         data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, auto_ai_link=True, auto_ai_note=True)["data"]
 
         self.assertTrue(data["applied"])
-        self.assertEqual([data["settings"][key] for key in ("auto_ai_link", "auto_ai_file", "auto_ai_note")],
-                         [True, False, True])
+        self.assertEqual([data["settings"][f"auto_ai_{kind}"] for kind in ("link", "file", "image", "note")],
+                         [True, False, False, True])
+        self.assertEqual(data["settings"]["auto_ai_image_limit"], {"count": 5, "seconds": 600})
         self.assertEqual(self.bases.sent(), [])
         self.assertNotIn("auto_ai_link", self.post("/base/listen/list", bot=self.bot("wxid_ser"))["data"])
+
+    def test_auto_ai_limit_is_saved_per_type(self):
+        self.register("wxid_ser")
+
+        data = self.post("/admin/bots/wxid_ser/listen/settings", token=None,
+                         auto_ai_image_limit={"count": 2, "seconds": 60})["data"]
+
+        self.assertEqual(data["settings"]["auto_ai_image_limit"], {"count": 2, "seconds": 60})
+        self.assertEqual(data["settings"]["auto_ai_link_limit"], {"count": 5, "seconds": 600})
+        self.assertEqual(self.bases.sent(), [])
 
     def test_only_wechat_settings_are_pushed_to_the_base(self):
         callback = self.register("wxid_ser")
@@ -200,7 +211,9 @@ class ListenPageTests(ServerCase):
         self.register("wxid_ser")
 
         for body in ({"private_poll": "yes"}, {"someday": True}, {}, {"group_reply": []},
-                     {"group_reply": ["at", "wave"]}, {"group_reply": "at"}, {"auto_ai_link": "on"}):
+                     {"group_reply": ["at", "wave"]}, {"group_reply": "at"}, {"auto_ai_link": "on"},
+                     {"auto_ai_link_limit": {"count": 0, "seconds": 60}}, {"auto_ai_link_limit": {"count": 3}},
+                     {"auto_ai_link_limit": {"count": "3", "seconds": 60}}, {"auto_ai_link_limit": [3, 60]}):
             with self.subTest(body=body):
                 self.assertNotEqual(
                     self.post("/admin/bots/wxid_ser/listen/settings", token=None, **body)["code"], 0)
