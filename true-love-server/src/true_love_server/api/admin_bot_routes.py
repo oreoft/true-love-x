@@ -175,21 +175,25 @@ async def listen_reset_all(bot_id: str, request: dict = Body(default={})):
 
 @admin_bot_router.get("/{bot_id}/listen/settings")
 async def listen_settings(bot_id: str):
-    """微信设置：private_poll 私聊轮询，auto_accept_friends 自动通过好友申请，group_reply 群回复方式"""
-    return ApiResponse(data=bot_settings.wechat_settings(deps.wechat_bot(bot_id).bot_id))
+    """
+    微信设置：private_poll 私聊轮询，auto_accept_friends 自动通过好友申请，group_reply 群回复方式，
+    auto_ai_link / auto_ai_file / auto_ai_note 群里的链接、文件、笔记不 @ 也交给 AI
+    """
+    return ApiResponse(data=bot_settings.admin_settings(deps.wechat_bot(bot_id).bot_id))
 
 
 @admin_bot_router.post("/{bot_id}/listen/settings")
 async def listen_save_settings(bot_id: str, request: dict):
     """
-    改微信设置：先存下来，再通知 base 立即生效；base 离线时等它下次连上微信再取
+    改微信设置：先存下来，再通知 base 立即生效；base 离线时等它下次连上微信再取。
+    自动交给 AI 的开关只有 server 用，存下来就生效，不发给 base
 
     Body:
-        - 要改的设置，如 {"private_poll": true} 或 {"group_reply": ["at", "quote"]}
+        - 要改的设置，如 {"private_poll": true}、{"group_reply": ["at", "quote"]} 或 {"auto_ai_link": true}
 
     Returns:
         - settings: 存下来的全部设置
-        - applied: base 是否已经生效
+        - applied: 是否已经生效
     """
     bot = deps.wechat_bot(bot_id)
     _check_settings(request)
@@ -198,16 +202,19 @@ async def listen_save_settings(bot_id: str, request: dict):
             bot_settings.set_list(bot.bot_id, key, value)
         else:
             bot_settings.set_bool(bot.bot_id, key, value)
-    result = await base_client.wechat(bot.bot_id).apply_settings(request)
-    return ApiResponse(data={"settings": bot_settings.wechat_settings(bot.bot_id),
-                             "applied": result.get("success", False)})
+    for_base = {key: value for key, value in request.items() if key not in bot_settings.AUTO_AI_SWITCHES}
+    applied = True
+    if for_base:
+        result = await base_client.wechat(bot.bot_id).apply_settings(for_base)
+        applied = result.get("success", False)
+    return ApiResponse(data={"settings": bot_settings.admin_settings(bot.bot_id), "applied": applied})
 
 
 def _check_settings(request: dict) -> None:
     if not request:
         raise ValidationException("没有要改的设置")
     for key, value in request.items():
-        if key in bot_settings.WECHAT_SWITCHES:
+        if key in bot_settings.WECHAT_SWITCHES or key in bot_settings.AUTO_AI_SWITCHES:
             if not isinstance(value, bool):
                 raise ValidationException(f"{key} 要是 true 或 false")
         elif key == bot_settings.GROUP_REPLY:

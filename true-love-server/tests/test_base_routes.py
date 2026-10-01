@@ -84,6 +84,43 @@ class OnMessageTests(ServerCase):
         self.assertEqual(self.ai_calls, [])
         self.assertEqual(len(self.messages("wxid_m8s")), 1)
 
+    def test_group_link_file_and_note_go_to_ai_only_when_switched_on(self):
+        link = message(msg_id="link", msg_type="link", link_msg={"url": "https://mp.weixin.qq.com/s/x"})
+        file = message(msg_id="file", msg_type="file",
+                       file_msg={"file_name": "a.pdf", "resource": {"ref": "wx_imgs/a.pdf", "source": "local"}})
+        note = message(msg_id="note", msg_type="note", content="笔记玩AI最后就是玩数据中心")
+        self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=link)
+        self.assertEqual(self.ai_calls, [])
+
+        for key in bot_settings.AUTO_AI_SWITCHES:
+            bot_settings.set_bool("wxid_m8s", key, True)
+        for msg in (dict(link, msg_id="link2"), file, note):
+            self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=msg)
+
+        self.assertEqual([payload["msg"]["msg_type"] for _, payload in self.ai_calls], ["link", "file", "note"])
+
+    def test_auto_ai_skips_messages_with_nothing_to_read(self):
+        self.register("wxid_m8s")
+        for key in bot_settings.AUTO_AI_SWITCHES:
+            bot_settings.set_bool("wxid_m8s", key, True)
+
+        for msg in (message(msg_id="1", msg_type="link", link_msg={"url": None}),
+                    message(msg_id="2", msg_type="file", file_msg={"file_name": "a.pdf"}),
+                    message(msg_id="3", msg_type="note", content="笔记"),
+                    message(msg_id="4", msg_type="image")):
+            self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=msg)
+
+        self.assertEqual(self.ai_calls, [])
+
+    def test_each_switch_only_covers_its_own_type(self):
+        self.register("wxid_m8s")
+        bot_settings.set_bool("wxid_m8s", bot_settings.AUTO_AI_FILE, True)
+
+        self.post("/base/on-message", bot=self.bot("wxid_m8s"),
+                  msg=message(msg_type="link", link_msg={"url": "https://mp.weixin.qq.com/s/x"}))
+
+        self.assertEqual(self.ai_calls, [])
+
     def test_media_is_handed_to_ai_as_a_url_on_the_base_that_received_it(self):
         self.post("/base/on-message", bot=self.bot("wxid_ser", callback="http://100.64.0.9:5000"),
                   msg=message(is_group=False, msg_type="image",

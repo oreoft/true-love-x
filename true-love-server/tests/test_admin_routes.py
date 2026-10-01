@@ -151,7 +151,8 @@ class ListenPageTests(ServerCase):
 
         data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, auto_accept_friends=True)["data"]
 
-        self.assertEqual(data, {"settings": {"private_poll": False, "auto_accept_friends": True, "group_reply": ["at"]},
+        self.assertEqual(data, {"settings": {"private_poll": False, "auto_accept_friends": True, "group_reply": ["at"],
+                                             "auto_ai_link": False, "auto_ai_file": False, "auto_ai_note": False},
                                 "applied": True})
         self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["auto_accept_friends"])
         [(url, payload)] = self.bases.sent()
@@ -167,6 +168,24 @@ class ListenPageTests(ServerCase):
                          ["tickle", "quote"])
         self.assertIn((f"{callback}/settings", {"group_reply": ["tickle", "quote"]}), self.bases.sent())
 
+    def test_auto_ai_switches_are_kept_on_the_server_and_take_effect_at_once(self):
+        self.register("wxid_ser")
+
+        data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, auto_ai_link=True, auto_ai_note=True)["data"]
+
+        self.assertTrue(data["applied"])
+        self.assertEqual([data["settings"][key] for key in ("auto_ai_link", "auto_ai_file", "auto_ai_note")],
+                         [True, False, True])
+        self.assertEqual(self.bases.sent(), [])
+        self.assertNotIn("auto_ai_link", self.post("/base/listen/list", bot=self.bot("wxid_ser"))["data"])
+
+    def test_only_wechat_settings_are_pushed_to_the_base(self):
+        callback = self.register("wxid_ser")
+
+        self.post("/admin/bots/wxid_ser/listen/settings", token=None, private_poll=True, auto_ai_file=True)
+
+        self.assertEqual(self.bases.sent(), [(f"{callback}/settings", {"private_poll": True})])
+
     def test_switch_is_saved_while_the_base_is_offline(self):
         callback = self.register("wxid_ser")
         self.bases.reply(f"{callback}/settings", error=ConnectionError("base is down"))
@@ -181,7 +200,7 @@ class ListenPageTests(ServerCase):
         self.register("wxid_ser")
 
         for body in ({"private_poll": "yes"}, {"someday": True}, {}, {"group_reply": []},
-                     {"group_reply": ["at", "wave"]}, {"group_reply": "at"}):
+                     {"group_reply": ["at", "wave"]}, {"group_reply": "at"}, {"auto_ai_link": "on"}):
             with self.subTest(body=body):
                 self.assertNotEqual(
                     self.post("/admin/bots/wxid_ser/listen/settings", token=None, **body)["code"], 0)
