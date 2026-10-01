@@ -1,4 +1,4 @@
-name: true-love-base Deploy to m8s-win and ser-win
+name: true-love-base Deploy to m8s-win, ser-win and gcp-win
 
 on:
   workflow_dispatch:
@@ -8,9 +8,6 @@ on:
       - "true-love-base/**"
       - ".github/systemd/**"
       - ".github/workflows/true-love-base.yml"
-
-env:
-  SERVER_PORT: 2233
 
 permissions:
   contents: read
@@ -22,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     # Each machine runs the WeChat account logged in there; base reads which one it is from the machine itself.
-    # One failing machine does not stop the other.
+    # One failing machine does not stop the others.
     strategy:
       fail-fast: false
       matrix:
@@ -31,13 +28,21 @@ jobs:
             host_secret: M8S_GW_HOST
             key_secret: M8S_SSH_DOOR_KEY
             user: admin
+            port: 2233
           - machine: ser
             host_secret: SER_GW_HOST
             key_secret: SER_SSH_DOOR_KEY
             user: server
+            port: 2233
+          - machine: gcp-win
+            host_secret: GCP_WIN_HOST
+            key_secret: GCP_WIN_SSH_KEY
+            user: admin
+            port: 22
     env:
       SERVER_IP: ${{ secrets[matrix.host_secret] }}
       SERVER_USER: ${{ matrix.user }}
+      SERVER_PORT: ${{ matrix.port }}
       SERVER_SSH_KEY: ${{ secrets[matrix.key_secret] }}
 
     steps:
