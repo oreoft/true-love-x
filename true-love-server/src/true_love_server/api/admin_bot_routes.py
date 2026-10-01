@@ -175,31 +175,46 @@ async def listen_reset_all(bot_id: str, request: dict = Body(default={})):
 
 @admin_bot_router.get("/{bot_id}/listen/settings")
 async def listen_settings(bot_id: str):
-    """功能开关：private_poll 私聊轮询，auto_accept_friends 自动通过好友申请"""
-    return ApiResponse(data=bot_settings.wechat_switches(deps.wechat_bot(bot_id).bot_id))
+    """微信设置：private_poll 私聊轮询，auto_accept_friends 自动通过好友申请，group_reply 群回复方式"""
+    return ApiResponse(data=bot_settings.wechat_settings(deps.wechat_bot(bot_id).bot_id))
 
 
 @admin_bot_router.post("/{bot_id}/listen/settings")
 async def listen_save_settings(bot_id: str, request: dict):
     """
-    改功能开关：先存下来，再通知 base 立即生效；base 离线时等它下次连上微信再取
+    改微信设置：先存下来，再通知 base 立即生效；base 离线时等它下次连上微信再取
 
     Body:
-        - 要改的开关，如 {"private_poll": true}
+        - 要改的设置，如 {"private_poll": true} 或 {"group_reply": ["at", "quote"]}
 
     Returns:
-        - settings: 存下来的全部开关
+        - settings: 存下来的全部设置
         - applied: base 是否已经生效
     """
     bot = deps.wechat_bot(bot_id)
-    switches = {key: value for key, value in request.items() if key in bot_settings.WECHAT_SWITCHES}
-    if not switches or len(switches) != len(request) or not all(isinstance(v, bool) for v in switches.values()):
-        raise ValidationException(f"只能改这些开关，值要是 true 或 false：{', '.join(bot_settings.WECHAT_SWITCHES)}")
-    for key, value in switches.items():
-        bot_settings.set_bool(bot.bot_id, key, value)
-    result = await base_client.wechat(bot.bot_id).apply_settings(switches)
-    return ApiResponse(data={"settings": bot_settings.wechat_switches(bot.bot_id),
+    _check_settings(request)
+    for key, value in request.items():
+        if key == bot_settings.GROUP_REPLY:
+            bot_settings.set_list(bot.bot_id, key, value)
+        else:
+            bot_settings.set_bool(bot.bot_id, key, value)
+    result = await base_client.wechat(bot.bot_id).apply_settings(request)
+    return ApiResponse(data={"settings": bot_settings.wechat_settings(bot.bot_id),
                              "applied": result.get("success", False)})
+
+
+def _check_settings(request: dict) -> None:
+    if not request:
+        raise ValidationException("没有要改的设置")
+    for key, value in request.items():
+        if key in bot_settings.WECHAT_SWITCHES:
+            if not isinstance(value, bool):
+                raise ValidationException(f"{key} 要是 true 或 false")
+        elif key == bot_settings.GROUP_REPLY:
+            if not (isinstance(value, list) and value and all(style in bot_settings.REPLY_STYLES for style in value)):
+                raise ValidationException(f"群回复方式至少勾一个，只能是 {', '.join(bot_settings.REPLY_STYLES)}")
+        else:
+            raise ValidationException(f"不认识的设置：{key}")
 
 
 @admin_bot_router.post("/{bot_id}/listen/mute-all-groups")

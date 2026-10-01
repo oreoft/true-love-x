@@ -589,7 +589,7 @@ class RoutesTests(unittest.TestCase):
         self.log_in()
 
         asyncio.run(self.routes.send_text(
-            {"sendReceiver": "room", "content": "hi", "atReceiver": "alice", "quoteMsgId": "m1"}))
+            {"sendReceiver": "room", "content": "hi", "atReceiver": "alice", "replyMsgId": "m1"}))
 
         self.robot.send_text_msg.assert_called_once_with("hi", "room", "alice", "m1")
 

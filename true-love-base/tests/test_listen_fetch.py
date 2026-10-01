@@ -96,11 +96,12 @@ class ListenFetchTests(unittest.TestCase):
         self.assertEqual(self.clock.now, self.client.LISTEN_FETCH_DEADLINE)
         self.assertLessEqual(max(self.clock.waits), self.client.LISTEN_FETCH_MAX_DELAY)
 
-    def test_only_yes_or_no_fields_count_as_switches(self):
+    def test_everything_besides_the_chats_is_a_setting(self):
         self.post_json.return_value = reply(
-            {"code": 0, "data": {"chats": ["群A"], "auto_accept_friends": False, "note": "x"}})
+            {"code": 0, "data": {"chats": ["群A"], "auto_accept_friends": False, "group_reply": ["at", "quote"]}})
 
-        self.assertEqual(self.client.fetch_listen_chats(self.clock).switches, {"auto_accept_friends": False})
+        self.assertEqual(self.client.fetch_listen_chats(self.clock).settings,
+                         {"auto_accept_friends": False, "group_reply": ["at", "quote"]})
 
     def test_business_error_is_retried_like_a_network_error(self):
         self.post_json.side_effect = [reply({"code": 401, "message": "failed token check"}),

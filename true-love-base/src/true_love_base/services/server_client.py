@@ -3,7 +3,7 @@
 Server Client - 与后端 AI 服务通信
 
 负责把消息转发到服务端的 /base/on-message；服务端只确认收到，AI 回复由服务端异步回调 base 发送。
-连上微信时从服务端的 /base/listen/list 取监听列表和功能开关。
+连上微信时从服务端的 /base/listen/list 取监听列表和各项设置。
 每次请求都带上这个 base 的机器人信息（bot_id、回调地址、昵称），server 据此登记和回调。
 使用全局 httpx.Client 复用 HTTP 连接，线程安全的熔断器。
 """
@@ -209,7 +209,7 @@ LISTEN_FETCH_MAX_DELAY = 60
 class ListenSetup(NamedTuple):
     """server 上这个机器人的监听设置"""
     chats: list[str]  # 开子窗口监听的群和好友
-    switches: dict[str, bool]  # 功能开关，如私聊轮询 private_poll、自动通过好友申请 auto_accept_friends
+    settings: dict  # 其余设置：私聊轮询 private_poll、自动通过好友申请 auto_accept_friends、群回复方式 group_reply
 
 
 def _get_listen_setup() -> ListenSetup:
@@ -224,9 +224,9 @@ def _get_listen_setup() -> ListenSetup:
     chats = data.get("chats")
     if not isinstance(chats, list):
         raise RuntimeError(f"server returned no chat list: {resp_data}")
-    # 旧 server 没有的开关由 base 当作关闭
-    switches = {key: value for key, value in data.items() if isinstance(value, bool)}
-    return ListenSetup([str(chat) for chat in chats], switches)
+    # 旧 server 没有的设置由 base 用默认值
+    settings = {key: value for key, value in data.items() if key != "chats"}
+    return ListenSetup([str(chat) for chat in chats], settings)
 
 
 def fetch_listen_chats(stop_event: threading.Event) -> Optional[ListenSetup]:

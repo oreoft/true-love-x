@@ -95,8 +95,8 @@ class ReplyRoutingTests(unittest.IsolatedAsyncioTestCase):
         await server_client.send_text("room", "hi", "alice", "m1")
         await server_client.send_text("alice", "hi")
 
-        self.assertEqual(self.payloads[0]["quote_msg_id"], "m1")
-        self.assertNotIn("quote_msg_id", self.payloads[1])
+        self.assertEqual(self.payloads[0]["reply_msg_id"], "m1")
+        self.assertNotIn("reply_msg_id", self.payloads[1])
 
 
 if __name__ == "__main__":

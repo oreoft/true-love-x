@@ -121,7 +121,7 @@ class ListenListTests(ServerCase):
 
         response = self.post("/base/listen/list", bot=self.bot("wxid_ser"))
 
-        self.assertEqual(response["data"], {"chats": ["群B"], "private_poll": False, "auto_accept_friends": False})
+        self.assertEqual(response["data"], {"chats": ["群B"], "private_poll": False, "auto_accept_friends": False, "group_reply": ["at"]})
 
     def test_private_poll_setting_comes_with_the_list(self):
         self.register("wxid_ser")

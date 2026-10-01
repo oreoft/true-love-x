@@ -8,6 +8,7 @@ Robot - 消息处理机器人
 """
 
 import logging
+import random
 import threading
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,7 @@ from typing import Callable, Optional
 
 from true_love_common.chat_msg import ChatMsg
 from true_love_base.core import WxAutoClient
+from true_love_base.models.reply import REPLY_STYLES
 from true_love_base.services import server_client
 from true_love_base.services.friend_acceptor import FriendAcceptor
 from true_love_base.services.private_poller import PrivatePoller
@@ -63,6 +65,8 @@ class Robot:
         # 没开子窗口的私聊靠主窗口红点轮询来收；自动通过好友申请
         self.private_poller = PrivatePoller(client, self.on_message)
         self.friend_acceptor = FriendAcceptor(client, self._announce_new_friends)
+        # 群回复方式：勾了几种就在其中随机挑一种
+        self.group_reply: list[str] = ["at"]
 
         self.LOG.info(f"Robot initialized, max_workers: {self.MAX_WORKERS}")
 
@@ -200,21 +204,23 @@ class Robot:
         self, *, stop_event: threading.Event
     ) -> dict:
         """
-        向 server 取监听设置，开始监听并按开关启停各项功能；取不到时一个都不监听，开关保持原样
+        向 server 取监听设置，开始监听并应用各项设置；取不到时一个都不监听，设置保持原样
 
         Returns:
             包含成功和失败列表的字典:
             - success: 成功监听的聊天列表
             - failed: 监听失败的聊天列表
             - unavailable: 没从 server 取到监听列表时为 True
-            - switches: 各项功能开关现在的状态
+            - settings: 各项设置现在的值
         """
         setup = server_client.fetch_listen_chats(stop_event)
         if setup is None:
-            return {"success": [], "failed": [], "unavailable": True, "switches": self.switches()}
+            return {"success": [], "failed": [], "unavailable": True, "settings": self.settings()}
         chats = setup.chats
-        self.apply_switches({name: setup.switches.get(name, False) for name in self._switchable()})
-        self.LOG.info(f"Loading {len(chats)} listen chats from server, switches: {self.switches()}")
+        # 旧 server 没有的设置用默认值：开关关闭，群里 @ 回复
+        self.apply_settings({**{name: False for name in self._switchable()}, "group_reply": ["at"],
+                             **setup.settings})
+        self.LOG.info(f"Loading {len(chats)} listen chats from server, settings: {self.settings()}")
 
         success = []
         failed = []
@@ -237,29 +243,36 @@ class Robot:
             else:
                 failed.append(chat_name)
 
-        return {"success": success, "failed": failed, "unavailable": False, "switches": self.switches()}
+        return {"success": success, "failed": failed, "unavailable": False, "settings": self.settings()}
 
-    # ==================== 功能开关 ====================
+    # ==================== 设置 ====================
 
     def _switchable(self) -> dict:
         return {"private_poll": self.private_poller, "auto_accept_friends": self.friend_acceptor}
 
-    def switches(self) -> dict[str, bool]:
-        """各项功能开关现在的状态"""
-        return {name: feature.enabled for name, feature in self._switchable().items()}
+    def settings(self) -> dict:
+        """各项设置现在的值：功能开关和群回复方式"""
+        return {**{name: feature.enabled for name, feature in self._switchable().items()},
+                "group_reply": list(self.group_reply)}
 
-    def apply_switches(self, switches: dict[str, bool]) -> dict[str, bool]:
+    def apply_settings(self, settings: dict) -> dict:
         """
-        打开或关闭功能，不认识的开关忽略
+        应用 server 下发的设置，不认识的忽略
 
         Returns:
-            各项功能开关现在的状态
+            各项设置现在的值
         """
         features = self._switchable()
-        for name, enabled in switches.items():
+        for name, value in settings.items():
             if name in features:
-                features[name].set_enabled(bool(enabled))
-        return self.switches()
+                features[name].set_enabled(bool(value))
+            elif name == "group_reply":
+                styles = [style for style in REPLY_STYLES if isinstance(value, list) and style in value]
+                if styles:
+                    self.group_reply = styles
+                else:
+                    self.LOG.warning("Ignoring group reply styles %r", value)
+        return self.settings()
 
     def _announce_new_friends(self, requests: list[str]) -> None:
         """自动通过了好友申请后告诉管理员"""
@@ -287,7 +300,7 @@ class Robot:
     # ==================== 消息发送 ====================
 
     def send_text_msg(self, msg: str, receiver: str, at_user: Optional[str] = None,
-                      quote_msg_id: str = "") -> bool:
+                      reply_msg_id: str = "") -> bool:
         """
         发送文本消息
         
@@ -295,7 +308,7 @@ class Robot:
             msg: 消息内容
             receiver: 接收者
             at_user: 要@的用户（可选）
-            quote_msg_id: 要引用回复的消息 id（可选），引用不了时照常发送
+            reply_msg_id: 这条是在回复哪条群消息（可选）；按群回复方式设置 @、拍一拍或引用对方
             
         Returns:
             是否发送成功
@@ -305,7 +318,10 @@ class Robot:
 
         at_list = [at_user] if at_user else None
         self.LOG.info(f"Sending to [{receiver}]: {msg[:50]}...")
-        return self.client.send_text(receiver, msg, at_list, quote_msg_id)
+        if not reply_msg_id:
+            return self.client.send_text(receiver, msg, at_list)
+        style = random.choice(self.group_reply)
+        return self.client.send_text(receiver, msg, at_list, reply_msg_id, style)
 
     def send_file_msg(self, path: str, receiver: str) -> bool:
         """

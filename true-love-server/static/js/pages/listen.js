@@ -1,8 +1,8 @@
 /**
  * 监听管理（微信专属）：看每个监听是否健康，测活、重置、移除、添加；
- * 功能开关（私聊轮询、自动通过好友申请）和一键群免打扰
+ * 微信设置（私聊轮询、自动通过好友申请、群回复方式）和一键群免打扰
  *
- * 这些操作都要调 base，base 离线时按钮变灰；功能开关离线时也能改，base 下次连上微信时生效。
+ * 这些操作都要调 base，base 离线时按钮变灰；设置离线时也能改，base 下次连上微信时生效。
  */
 
 import { botApi } from '../api.js';
@@ -14,6 +14,8 @@ const SWITCHES = [
     ['private_poll', '私聊轮询', '没开子窗口的私聊靠主窗口红点来收；群要设成免打扰，轮询才不会点开它们'],
     ['auto_accept_friends', '自动通过好友申请', '每两分钟看一次新朋友，有申请就通过，并告诉管理员通过了谁'],
 ];
+// 群回复方式：[值, 名称]，勾几个就在其中随机挑
+const REPLY_STYLES = [['at', '@ 回复'], ['tickle', '拍一拍'], ['quote', '引用回复']];
 const REASONS = { window_not_found: '窗口丢失', get_windows_failed: '取不到窗口', chat_info_failed: '窗口无响应' };
 
 export async function show(root, ctx) {
@@ -58,6 +60,13 @@ export async function show(root, ctx) {
             <button class="btn sm" data-switch="${key}">${switches[key] ? '关闭' : '打开'}</button>
             ${key === 'private_poll' ? `<button class="btn sm" id="muteGroups" ${disabled}>一键群免打扰</button>` : ''}
         </div>`).join('')}
+        <div class="listen-settings">
+            <span>群回复方式</span>
+            ${REPLY_STYLES.map(([value, label]) => `<label><input type="checkbox" data-reply="${value}"
+                ${(switches.group_reply || ['at']).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}
+            <span class="muted grow">勾几个就随机用其中一种；拍一拍、引用做不到时改用 @。私聊总是直接回复</span>
+            <button class="btn sm" id="saveReply">保存</button>
+        </div>
         ${statusError ? `<div class="banner">没取到监听状态：${esc(statusError)}</div>` : `
         <div class="muted">${summary.healthy}/${listeners.length} 健康${summary.unhealthy ? `，<span class="warn-text">${summary.unhealthy} 个需要处理</span>` : ''}</div>`}
         <div class="listen-grid">
@@ -71,6 +80,13 @@ export async function show(root, ctx) {
                         <button class="btn sm danger" data-remove="${i}" ${disabled}>移除</button>
                     </div>
                 </div>`).join('')}
+        <div class="listen-settings">
+            <span>群回复方式</span>
+            ${REPLY_STYLES.map(([value, label]) => `<label><input type="checkbox" data-reply="${value}"
+                ${(switches.group_reply || ['at']).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}
+            <span class="muted grow">勾几个就随机用其中一种；拍一拍、引用做不到时改用 @。私聊总是直接回复</span>
+            <button class="btn sm" id="saveReply">保存</button>
+        </div>
             <button class="add" id="add" ${disabled}>＋ 添加监听</button>
         </div>`;
 
@@ -97,6 +113,13 @@ export async function show(root, ctx) {
             reload();
         };
     });
+    $('#saveReply', root).onclick = async (e) => {
+        const styles = $$('[data-reply]', root).filter((el) => el.checked).map((el) => el.dataset.reply);
+        if (!styles.length) { toast('至少勾一种回复方式', 'error'); return; }
+        const result = await busy(e.target, '保存中…', () => attempt(() => api.listenSaveSettings({ group_reply: styles })));
+        if (result) toast(result.applied ? '群回复方式已保存' : '群回复方式已保存，base 下次连上微信时生效');
+        reload();
+    };
     $('#muteGroups', root).onclick = (e) => confirmModal('把所有群设成免打扰？',
         'base 会在微信里逐个打开群的右键菜单，群多时要等一两分钟。开了子窗口的群照常收消息。', async () => {
             const result = await busy(e.target, '设置中…', () => attempt(() => api.listenMuteAllGroups()));

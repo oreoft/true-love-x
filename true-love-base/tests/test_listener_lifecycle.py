@@ -19,9 +19,9 @@ def module(name, **attributes):
     return result
 
 
-def setup(chats, **switches):
+def setup(chats, **settings):
     """server 返回的监听设置"""
-    return types.SimpleNamespace(chats=chats, switches=switches)
+    return types.SimpleNamespace(chats=chats, settings=settings)
 
 
 def load_source(name, path):
@@ -99,6 +99,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         sys.modules["true_love_base.core"] = module(
             "true_love_base.core", WxAutoClient=self.client_module.WxAutoClient
         )
+        sys.modules["true_love_base.models.reply"] = load_source("lifecycle_reply", "models/reply.py")
         self.poller_module = load_source("lifecycle_poller", "services/private_poller.py")
         sys.modules["true_love_base.services.private_poller"] = self.poller_module
         self.acceptor_module = load_source("lifecycle_acceptor", "services/friend_acceptor.py")
@@ -206,7 +207,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.sdk.AddListenChat.side_effect = register
         result = robot.load_listen_chats(stop_event=stopped)
 
-        self.assertEqual(result, {"success": ["first"], "failed": [], "unavailable": False, "switches": {"private_poll": False, "auto_accept_friends": False}})
+        self.assertEqual(result, {"success": ["first"], "failed": [], "unavailable": False, "settings": {"private_poll": False, "auto_accept_friends": False, "group_reply": ["at"]}})
         self.assertEqual([call.args[0] for call in self.sdk.AddListenChat.call_args_list], ["first"])
 
     def test_startup_cancellation_stops_registration_retries(self):
@@ -231,7 +232,7 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         result = robot.load_listen_chats(stop_event=threading.Event())
 
-        self.assertEqual(result, {"success": [], "failed": [], "unavailable": True, "switches": {"private_poll": False, "auto_accept_friends": False}})
+        self.assertEqual(result, {"success": [], "failed": [], "unavailable": True, "settings": {"private_poll": False, "auto_accept_friends": False, "group_reply": ["at"]}})
         self.sdk.AddListenChat.assert_not_called()
 
     def test_listeners_are_registered_in_the_order_the_server_returns(self):
@@ -243,7 +244,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         result = robot.load_listen_chats(stop_event=stop)
 
         self.server.fetch_listen_chats.assert_called_once_with(stop)
-        self.assertEqual(result, {"success": ["first", "second"], "failed": [], "unavailable": False, "switches": {"private_poll": False, "auto_accept_friends": False}})
+        self.assertEqual(result, {"success": ["first", "second"], "failed": [], "unavailable": False, "settings": {"private_poll": False, "auto_accept_friends": False, "group_reply": ["at"]}})
         self.assertEqual([call.args[0] for call in self.sdk.AddListenChat.call_args_list], ["first", "second"])
 
     def test_listener_is_not_registered_when_its_chat_window_never_opened(self):
@@ -295,7 +296,7 @@ class ListenerLifecycleTests(unittest.TestCase):
             if cancel_loading:
                 shutdown.is_set.return_value = True
             if unavailable:
-                return {"success": [], "failed": [], "unavailable": True, "switches": {"private_poll": False, "auto_accept_friends": False}}
+                return {"success": [], "failed": [], "unavailable": True, "settings": {"private_poll": False, "auto_accept_friends": False, "group_reply": ["at"]}}
             return {"success": ["group"], "failed": [], "unavailable": False}
 
         robot.load_listen_chats.side_effect = load
@@ -489,7 +490,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.assertFalse(poller._thread.is_alive())
         self.assertTrue(client.next_private_messages.called)
 
-    def test_server_switches_turn_features_on_and_unknown_or_missing_ones_off(self):
+    def test_server_settings_turn_features_on_and_unknown_or_missing_ones_off(self):
         self.server.fetch_listen_chats.return_value = setup(["first"], private_poll=True, someday=True)
         robot = self.robot_module.Robot(self.client)
         self.addCleanup(robot.cleanup)
@@ -501,15 +502,39 @@ class ListenerLifecycleTests(unittest.TestCase):
         robot.private_poller.set_enabled.assert_called_once_with(True)
         robot.friend_acceptor.set_enabled.assert_called_once_with(False)
 
-    def test_switches_pushed_by_the_server_change_only_what_they_name(self):
+    def test_settings_pushed_by_the_server_change_only_what_they_name(self):
         robot = self.robot_module.Robot(self.client)
         self.addCleanup(robot.cleanup)
         robot.friend_acceptor._interval = 3600
         self.sdk.GetNewFriends.return_value = []
 
-        state = robot.apply_switches({"auto_accept_friends": True, "someday": True})
+        state = robot.apply_settings({"auto_accept_friends": True, "group_reply": ["quote", "at", "x"], "someday": 1})
 
-        self.assertEqual(state, {"private_poll": False, "auto_accept_friends": True})
+        self.assertEqual(state, {"private_poll": False, "auto_accept_friends": True, "group_reply": ["at", "quote"]})
+
+    def test_unusable_group_reply_styles_keep_the_current_ones(self):
+        robot = self.robot_module.Robot(self.client)
+        self.addCleanup(robot.cleanup)
+
+        with self.assertLogs("Robot", level="WARNING"):
+            robot.apply_settings({"group_reply": ["x"]})
+
+        self.assertEqual(robot.group_reply, ["at"])
+
+    def test_group_reply_picks_one_of_the_chosen_styles(self):
+        robot = self.robot_module.Robot(self.client)
+        self.addCleanup(robot.cleanup)
+        robot.client = Mock()
+        robot.group_reply = ["tickle", "quote"]
+
+        styles = set()
+        for _ in range(40):
+            robot.send_text_msg("hi", "room", "alice", "m1")
+            styles.add(robot.client.send_text.call_args.args[4])
+        robot.send_text_msg("hi", "alice")
+
+        self.assertEqual(styles, {"tickle", "quote"})
+        robot.client.send_text.assert_called_with("alice", "hi", None)
 
     # ==================== 自动通过好友申请 ====================
 
@@ -568,7 +593,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         sessions["quiet"].select_option.assert_not_called()
         self.sdk.ChatWith.assert_called_once_with("gone", exact=True)
 
-    # ==================== 引用回复 ====================
+    # ==================== 群回复方式 ====================
 
     def received(self, msg_id="m1", chat="group"):
         raw = Mock(attr="friend", id=msg_id)
@@ -577,40 +602,60 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.client._create_internal_callback(chat, Mock())(raw, object())
         return raw
 
-    def test_reply_quotes_a_message_still_in_the_chat_window(self):
+    def test_quote_reply_quotes_a_message_still_in_the_chat_window(self):
         raw = self.received()
 
         with self.assertLogs("WxAutoClient", level="INFO"):
-            self.assertTrue(self.client.send_text("group", "answer", ["alice"], "m1"))
+            self.assertTrue(self.client.send_text("group", "answer", ["alice"], "m1", "quote"))
 
-        raw.quote.assert_called_once_with("answer", at=["alice"])
+        raw.quote.assert_called_once_with("answer")
         self.sdk.SendMsg.assert_not_called()
 
-    def test_reply_is_sent_plainly_when_the_message_cannot_be_quoted(self):
+    def test_tickle_reply_pats_the_sender_then_sends_without_at(self):
+        raw = self.received()
+        self.client_module.TICKLE_SETTLE_SECONDS = 0
+
+        with self.assertLogs("WxAutoClient", level="INFO"):
+            self.assertTrue(self.client.send_text("group", "answer", ["alice"], "m1", "tickle"))
+
+        raw.tickle.assert_called_once_with()
+        self.sdk.SendMsg.assert_called_once_with("answer", "group", at=None)
+
+    def test_at_reply_does_not_touch_the_message(self):
+        raw = self.received()
+
+        self.assertTrue(self.client.send_text("group", "answer", ["alice"], "m1", "at"))
+
+        raw.quote.assert_not_called()
+        raw.tickle.assert_not_called()
+        self.sdk.SendMsg.assert_called_once_with("answer", "group", at=["alice"])
+
+    def test_reply_falls_back_to_at_when_the_message_cannot_be_used(self):
         cases = {
-            "unknown id": lambda raw: "other",
-            "other chat": lambda raw: self.client._quotable.update(m1=(0, "elsewhere", raw)) or "m1",
-            "scrolled away": lambda raw: setattr(raw.exists, "return_value", False) or "m1",
-            "quote failed": lambda raw: setattr(raw.quote, "return_value", False) or "m1",
-            "quote raised": lambda raw: setattr(raw.quote, "side_effect", RuntimeError("gone")) or "m1",
+            "unknown id": ("quote", lambda raw: "other"),
+            "other chat": ("tickle", lambda raw: self.client._replyable.update(m1=(0, "elsewhere", raw)) or "m1"),
+            "scrolled away": ("quote", lambda raw: setattr(raw.exists, "return_value", False) or "m1"),
+            "quote failed": ("quote", lambda raw: setattr(raw.quote, "return_value", False) or "m1"),
+            "quote raised": ("quote", lambda raw: setattr(raw.quote, "side_effect", RuntimeError("gone")) or "m1"),
+            "tickle raised": ("tickle", lambda raw: setattr(raw.tickle, "side_effect", RuntimeError("gone")) or "m1"),
         }
-        for name, prepare in cases.items():
+        for name, (style, prepare) in cases.items():
             with self.subTest(name):
                 self.sdk.SendMsg.reset_mock()
                 raw = self.received()
-                quote_id = prepare(raw)
+                reply_id = prepare(raw)
 
                 with self.assertLogs("WxAutoClient", level="INFO"):
-                    self.assertTrue(self.client.send_text("group", "answer", ["alice"], quote_id))
+                    self.assertTrue(self.client.send_text("group", "answer", ["alice"], reply_id, style))
 
                 self.sdk.SendMsg.assert_called_once_with("answer", "group", at=["alice"])
 
-    def test_only_recent_messages_are_kept_for_quoting(self):
-        for i in range(self.client_module.QUOTE_KEEP_COUNT + 5):
+    def test_only_recent_messages_are_kept_for_replies(self):
+        for i in range(self.client_module.REPLY_KEEP_COUNT + 5):
             self.received(f"m{i}")
 
-        self.assertEqual(len(self.client._quotable), self.client_module.QUOTE_KEEP_COUNT)
-        self.assertNotIn("m0", self.client._quotable)
+        self.assertEqual(len(self.client._replyable), self.client_module.REPLY_KEEP_COUNT)
+        self.assertNotIn("m0", self.client._replyable)
 
 if __name__ == "__main__":
     unittest.main()

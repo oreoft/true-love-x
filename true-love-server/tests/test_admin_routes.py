@@ -151,10 +151,21 @@ class ListenPageTests(ServerCase):
 
         data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, auto_accept_friends=True)["data"]
 
-        self.assertEqual(data, {"settings": {"private_poll": False, "auto_accept_friends": True}, "applied": True})
+        self.assertEqual(data, {"settings": {"private_poll": False, "auto_accept_friends": True, "group_reply": ["at"]},
+                                "applied": True})
         self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["auto_accept_friends"])
         [(url, payload)] = self.bases.sent()
         self.assertEqual((url, payload), (f"{callback}/settings", {"auto_accept_friends": True}))
+
+    def test_group_reply_styles_are_saved_and_handed_to_the_base(self):
+        callback = self.register("wxid_ser")
+
+        self.post("/admin/bots/wxid_ser/listen/settings", token=None, group_reply=["tickle", "quote"])
+
+        self.assertEqual(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["group_reply"], ["tickle", "quote"])
+        self.assertEqual(self.post("/base/listen/list", bot=self.bot("wxid_ser"))["data"]["group_reply"],
+                         ["tickle", "quote"])
+        self.assertIn((f"{callback}/settings", {"group_reply": ["tickle", "quote"]}), self.bases.sent())
 
     def test_switch_is_saved_while_the_base_is_offline(self):
         callback = self.register("wxid_ser")
@@ -169,7 +180,8 @@ class ListenPageTests(ServerCase):
     def test_only_known_yes_or_no_switches_are_accepted(self):
         self.register("wxid_ser")
 
-        for body in ({"private_poll": "yes"}, {"someday": True}, {}):
+        for body in ({"private_poll": "yes"}, {"someday": True}, {}, {"group_reply": []},
+                     {"group_reply": ["at", "wave"]}, {"group_reply": "at"}):
             with self.subTest(body=body):
                 self.assertNotEqual(
                     self.post("/admin/bots/wxid_ser/listen/settings", token=None, **body)["code"], 0)

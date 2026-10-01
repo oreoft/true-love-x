@@ -5,7 +5,7 @@ WeChatClient - 微信 base 的专属接口
 在统一协议之外，微信 base 还开放了直接操作 wxautox4 的接口，监听管理用它们：
 
     POST {callback}/listen/add              {"nickname"}
-    POST {callback}/settings                {"private_poll"?, "auto_accept_friends"?}
+    POST {callback}/settings                {"private_poll"?, "auto_accept_friends"?, "group_reply"?}
     POST {callback}/groups/mute-all         {}
     POST {callback}/execute/wx              {"name", "params"}
     POST {callback}/execute/chat            {"chat_name", "name", "params"}
@@ -45,8 +45,8 @@ class WeChatClient(BaseClient):
     async def add_listen_chat(self, nickname: str) -> dict:
         return await self._call("add_listen_chat", "/listen/add", {"nickname": nickname}, timeout=_LISTEN_ADD_TIMEOUT)
 
-    async def apply_settings(self, switches: dict[str, bool]) -> dict:
-        return await self._call("apply_settings", "/settings", switches)
+    async def apply_settings(self, settings: dict) -> dict:
+        return await self._call("apply_settings", "/settings", settings)
 
     async def mute_all_groups(self) -> dict:
         return await self._call("mute_all_groups", "/groups/mute-all", {}, timeout=_MUTE_ALL_TIMEOUT)

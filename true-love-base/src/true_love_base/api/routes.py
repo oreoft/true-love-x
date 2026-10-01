@@ -11,6 +11,7 @@ from fastapi import APIRouter, Body
 from fastapi.responses import PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
+from true_love_base.models.reply import REPLY_STYLES
 from true_love_base.models.api import ApiErrors, ApiResponse
 from true_love_common.media import download
 
@@ -73,7 +74,7 @@ async def send_text(request: dict[str, Any] | None = Body(default=None)) -> dict
         - is_master: 为 true 时发给这个号的管理员，忽略 sendReceiver（可选）
         - content: 消息内容
         - atReceiver: 要@的人（可选）
-        - quoteMsgId: 要引用回复的消息 id（可选）；原消息还在监听窗口里时引用回复，否则照常发送
+        - replyMsgId: 这条是在回复哪条群消息（可选）；按群回复方式设置 @、拍一拍或引用对方，做不到时 @
 
     超过 2000 个字符时自动分批：在每批末尾 200 字符内寻找换行符切割，
     分批依次发送，仅第一批携带 @。
@@ -89,12 +90,12 @@ async def send_text(request: dict[str, Any] | None = Body(default=None)) -> dict
     receiver = _receiver(robot, data)
     content = data.get("content", "")
     at_receiver = data.get("atReceiver", "")
-    quote_msg_id = data.get("quoteMsgId", "")
+    reply_msg_id = data.get("replyMsgId", "")
 
     if not receiver or not content:
         return ApiErrors.INVALID_PARAMS.to_dict()
 
-    success = await _run_wx_operation(_send_text_operation, robot, receiver, content, at_receiver, quote_msg_id)
+    success = await _run_wx_operation(_send_text_operation, robot, receiver, content, at_receiver, reply_msg_id)
     if success:
         return ApiResponse.success().to_dict()
     return ApiErrors.SEND_FAILED.to_dict()
@@ -171,24 +172,28 @@ async def add_listen(request: dict[str, Any] | None = Body(default=None)) -> dic
 @router.post("/settings")
 async def apply_settings(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
     """
-    打开或关闭功能开关，只改请求里带了的
+    改设置，只改请求里带了的
 
-    开关存在 server，后台改了以后通知 base 立即生效；base 下次连上微信时也会从 server 取。
+    设置存在 server，后台改了以后通知 base 立即生效；base 下次连上微信时也会从 server 取。
 
     Request Body:
         - private_poll: 私聊轮询，没开子窗口的私聊靠主窗口红点来收（可选）
         - auto_accept_friends: 自动通过好友申请（可选）
+        - group_reply: 群回复方式，at / tickle / quote 里选一个或多个，多个时随机挑（可选）
 
     Response:
-        - data: 各项开关现在的状态
+        - data: 各项设置现在的值
     """
     robot = _get_robot()
     if robot is None:
         return ApiErrors.ROBOT_NOT_READY.to_dict()
-    switches = _payload(request)
-    if not switches or not all(isinstance(value, bool) for value in switches.values()):
+    settings = _payload(request)
+    styles = settings.get("group_reply", ["at"])
+    switches_ok = all(isinstance(value, bool) for key, value in settings.items() if key != "group_reply")
+    styles_ok = isinstance(styles, list) and styles and all(style in REPLY_STYLES for style in styles)
+    if not settings or not switches_ok or not styles_ok:
         return ApiErrors.INVALID_PARAMS.to_dict()
-    return ApiResponse.success(robot.apply_switches(switches)).to_dict()
+    return ApiResponse.success(robot.apply_settings(settings)).to_dict()
 
 
 @router.post("/groups/mute-all")
@@ -455,9 +460,9 @@ def serialize_result(result: Any) -> Any:
 
 
 def _send_text_operation(robot: "Robot", receiver: str, content: str, at_receiver: str,
-                         quote_msg_id: str = "") -> bool:
+                         reply_msg_id: str = "") -> bool:
     if len(content.encode("utf-8")) <= MAX_CHUNK_BYTES:
-        return robot.send_text_msg(content, receiver, at_receiver if at_receiver else None, quote_msg_id)
+        return robot.send_text_msg(content, receiver, at_receiver if at_receiver else None, reply_msg_id)
 
     chunks = split_long_text(content)
     LOG.info(
@@ -467,7 +472,7 @@ def _send_text_operation(robot: "Robot", receiver: str, content: str, at_receive
     )
     for idx, chunk in enumerate(chunks):
         mention = at_receiver if idx == 0 and at_receiver else None
-        ok = robot.send_text_msg(chunk, receiver, mention, quote_msg_id if idx == 0 else "")
+        ok = robot.send_text_msg(chunk, receiver, mention, reply_msg_id if idx == 0 else "")
         if not ok:
             LOG.error("send_text: failed on chunk %d/%d to [%s]", idx + 1, len(chunks), receiver)
             return False

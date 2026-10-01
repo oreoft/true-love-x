@@ -28,10 +28,10 @@ class SendTests(ServerCase):
             (f"{self.ser}/send/text", {"sendReceiver": "群A", "atReceiver": "alice", "content": "hi"})])
 
     def test_reply_passes_on_the_message_it_quotes(self):
-        self.post("/action/send", bot_id="wxid_ser", receiver="群A", at_user="alice", content="hi", quote_msg_id="m1")
+        self.post("/action/send", bot_id="wxid_ser", receiver="群A", at_user="alice", content="hi", reply_msg_id="m1")
 
         [(url, payload)] = self.bases.sent()
-        self.assertEqual(payload["quoteMsgId"], "m1")
+        self.assertEqual(payload["replyMsgId"], "m1")
 
     def test_message_for_the_master_lets_the_base_choose_the_receiver(self):
         self.post("/action/send", bot_id="wxid_ser", is_master=True, content="started")
