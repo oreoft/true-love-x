@@ -32,6 +32,9 @@ LOG = logging.getLogger("AgentLoop")
 MAX_TOOL_ITERATIONS = 6
 # 单个 skill 执行超时（秒）
 SKILL_TIMEOUT_SECONDS = 300
+# 收到图片、文件时替用户提的要求
+IMAGE_REQUEST = "请看看这张图片，说说上面是什么内容"
+FILE_REQUEST = "请看看这个文件，说说主要内容"
 
 def _clean_content(content: str, mention: str = "") -> str:
     """去掉正文里叫机器人的那段文字；是哪段文字由 base 识别后随消息带来"""
@@ -171,11 +174,11 @@ class AgentLoop:
             text = msg.voice_msg.text_content if msg.voice_msg else ""
             return f"[语音转文字]: {text}" if text else None
 
+        # 微信的图片、文件消息带不了文字，content 只是"图片"这类占位词；不明说要求的话模型不去看，反过来问用户要干什么
         if msg_type == "image":
             resource = msg.image_msg.resource if msg.image_msg else None
             ref = resource.ref if resource else ""
-            desc = content or "请分析这张图片"
-            return f"[图片:{ref}] {desc}" if ref else desc
+            return f"[图片:{ref}] {IMAGE_REQUEST}" if ref else (content or None)
 
         if msg_type == "link":
             url = msg.link_msg.url if msg.link_msg else ""
@@ -189,8 +192,7 @@ class AgentLoop:
             resource = msg.file_msg.resource if msg.file_msg else None
             ref = resource.ref if resource else ""
             if ref:
-                desc = content or "请分析这个文件"
-                return f"[文件:{ref}] {desc}"
+                return f"[文件:{ref}] {FILE_REQUEST}"
             return content or None
 
         if msg_type == "video":
