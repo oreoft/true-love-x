@@ -80,13 +80,6 @@ export async function show(root, ctx) {
                         <button class="btn sm danger" data-remove="${i}" ${disabled}>移除</button>
                     </div>
                 </div>`).join('')}
-        <div class="listen-settings">
-            <span>群回复方式</span>
-            ${REPLY_STYLES.map(([value, label]) => `<label><input type="checkbox" data-reply="${value}"
-                ${(switches.group_reply || ['at']).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}
-            <span class="muted grow">勾几个就等概率随机用其中一种；拍一拍后直接发回复，引用不了时改用 @。私聊总是直接回复</span>
-            <button class="btn sm" id="saveReply">保存</button>
-        </div>
             <button class="add" id="add" ${disabled}>＋ 添加监听</button>
         </div>`;
 
