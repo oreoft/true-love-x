@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 import logging
+import os
+import shutil
 from typing import Any, Optional
 
 from true_love_common.chat_msg import ChatMsg, ImageMsg, VoiceMsg, VideoMsg, FileMsg, LinkMsg, ResourceRef
-from true_love_base.utils.path_resolver import to_server_path
+from true_love_base.utils.path_resolver import get_wx_imgs_dir, to_server_path
 
 LOG = logging.getLogger("MessageConverter")
 
@@ -96,6 +98,10 @@ def convert_message(raw_msg: Any, chat_name: str, *, bot_id: str = "", bot_name:
         elif msg_type == 'quote':
             msg.refer_msg = _build_refer_msg(raw_msg, chat_name, is_group)
 
+        elif msg_type == 'note' and not is_group:
+            # 群里的笔记带不了 @，不会交给 AI，不值得点开窗口
+            _expand_note(msg, raw_msg)
+
         return msg
 
     except Exception as e:
@@ -159,6 +165,59 @@ def _get_url(raw_msg: Any) -> Optional[str]:
         return raw_msg.get_url()
     except Exception as e:
         LOG.warning(f"Link get_url failed: {e}")
+        return None
+
+
+def _expand_note(msg: ChatMsg, raw_msg: Any) -> None:
+    """
+    点开笔记读出全文，换成 AI 认识的类型：纯文字是 text，带图的是 image（只带第一张图，文字放 content）
+
+    content 里只有卡片上的文字，图片笔记只有"笔记"两个字；读失败就保持原样。
+    """
+    lines = _note_lines(raw_msg)
+    if not lines:
+        return
+    texts, images = [], []
+    for line in lines:
+        line = str(line).strip()
+        if not line:
+            continue
+        # 笔记里的图片 SDK 会先下载好，返回的是本地路径
+        (images if os.path.isfile(line) else texts).append(line)
+    body = "\n".join(texts)
+    msg.content = f"[笔记]\n{body}" if body else "[笔记]"
+    msg.msg_type = 'text'
+    if images:
+        ref = _to_media(images[0])
+        if ref:
+            msg.msg_type = 'image'
+            msg.image_msg = ImageMsg(resource=ResourceRef(ref=ref))
+
+
+def _note_lines(raw_msg: Any) -> Optional[list]:
+    if not hasattr(raw_msg, 'get_content'):
+        return None
+    try:
+        result = raw_msg.get_content(wait=3)
+    except Exception as e:
+        LOG.warning(f"Note get_content failed: {e}")
+        return None
+    # 读不出来时 SDK 不抛异常，返回一个"失败"的 WxResponse
+    if not isinstance(result, list):
+        LOG.warning(f"Note get_content failed: {result}")
+        return None
+    return result
+
+
+def _to_media(path: str) -> Optional[str]:
+    """把笔记里的图片挪进 wx_imgs，别的服务才能通过 /media 下载"""
+    try:
+        target = os.path.join(get_wx_imgs_dir(), os.path.basename(path))
+        if os.path.abspath(path) != os.path.abspath(target):
+            shutil.move(path, target)
+        return to_server_path(target)
+    except Exception as e:
+        LOG.warning(f"Failed to move note image {path}: {e}")
         return None
 
 
