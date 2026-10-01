@@ -30,7 +30,7 @@ def get_wx_imgs_dir() -> str:
     """
     if not os.path.exists(WX_IMGS_DIR):
         os.makedirs(WX_IMGS_DIR)
-        LOG.info(f"Created wx_imgs directory: {WX_IMGS_DIR}")
+        LOG.info("Created wx_imgs directory: %s", WX_IMGS_DIR)
 
     return WX_IMGS_DIR
 
@@ -47,5 +47,5 @@ def to_server_path(full_path: str) -> str:
     """
     filename = os.path.basename(str(full_path))
     relative_path = f"{WX_IMGS_DIR}/{filename}"
-    LOG.debug(f"Converted to server path: {full_path} -> {relative_path}")
+    LOG.debug("Converted to server path: %s -> %s", full_path, relative_path)
     return relative_path

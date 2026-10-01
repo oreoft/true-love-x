@@ -103,6 +103,12 @@ class ListenHealthTests(unittest.TestCase):
         self.assertEqual(self.client.probe_listen("room"),
                          {"count": 2, "last": {"sender": "alice", "type": "text", "content": "hi"}})
 
+    def test_probe_fails_loudly_when_the_window_cannot_be_read(self):
+        self.sdk.GetSubWindow.side_effect = lambda name: Mock(GetAllMessage=Mock(return_value={"message": "gone"}))
+
+        with self.assertRaisesRegex(RuntimeError, "gone"):
+            self.client.probe_listen("room")
+
     def test_probe_without_a_window_returns_nothing(self):
         self.sdk.GetSubWindow.side_effect = lambda name: None
 

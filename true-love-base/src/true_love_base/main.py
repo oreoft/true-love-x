@@ -41,21 +41,28 @@ def disable_quick_edit():
 
     try:
         import ctypes
-        kernel32 = ctypes.windll.kernel32
+        # use_last_error 让 ctypes 在调用后立刻保存 GetLastError()，避免被中间的调用覆盖
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
         # 获取标准输入句柄 (STD_INPUT_HANDLE = -10)
         handle = kernel32.GetStdHandle(-10)
-        # 获取当前控制台模式
+        # 获取当前控制台模式；失败时返回 0
         mode = ctypes.c_ulong()
-        kernel32.GetConsoleMode(handle, ctypes.byref(mode))
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            LOG.warning("Could not disable QuickEdit mode: GetConsoleMode failed, error %s",
+                        ctypes.get_last_error())
+            return
         # 禁用 QuickEdit 模式 (0x0040) 和插入模式 (0x0020)
         # ENABLE_QUICK_EDIT_MODE = 0x0040
         # ENABLE_INSERT_MODE = 0x0020
-        new_mode = mode.value & ~0x0040 & ~0x0020
-        kernel32.SetConsoleMode(handle, new_mode)
+        # 不带 ENABLE_EXTENDED_FLAGS (0x0080) 时 Windows 不认 QuickEdit 位的改动
+        new_mode = (mode.value | 0x0080) & ~0x0040 & ~0x0020
+        if not kernel32.SetConsoleMode(handle, new_mode):
+            LOG.warning("Could not disable QuickEdit mode: SetConsoleMode failed, error %s",
+                        ctypes.get_last_error())
+            return
         LOG.info("Disabled Windows console QuickEdit mode")
-    except Exception as e:
-        # 非 Windows 环境或没有控制台时忽略
-        LOG.debug(f"Could not disable QuickEdit mode: {e}")
+    except Exception:
+        LOG.warning("Could not disable QuickEdit mode", exc_info=True)
 
 
 def main():
@@ -121,6 +128,7 @@ def main():
             client.cleanup()
         finally:
             robot.cleanup()
+            server_client.stop_retrying()
         LOG.info("Cleanup completed, bye!")
 
 
@@ -142,15 +150,15 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
     if unavailable:
         LOG.error("Listen chats unavailable from server; not listening to any chat until the server restores them")
     elif len(success_chats) > 0:
-        LOG.info(f"Loaded {len(success_chats)} listen chats from server")
+        LOG.info("Loaded %s listen chats from server", len(success_chats))
     else:
         LOG.warning("No listen chats on server! Use API to add listeners")
 
     if len(failed_chats) > 0:
-        LOG.warning(f"Failed to load {len(failed_chats)} listen chats: {failed_chats}")
+        LOG.warning("Failed to load %s listen chats: %s", len(failed_chats), failed_chats)
 
     if not robot.master:
-        LOG.warning(f"Bot [{robot.client.bot_id}] has no master, startup and shutdown are not announced")
+        LOG.warning("Bot [%s] has no master, startup and shutdown are not announced", robot.client.bot_id)
         return True
 
     # 发送启动通知，包含监听成功和失败的列表
@@ -187,4 +195,5 @@ def init_wx() -> tuple[WxAutoClient, Robot]:
 
     # 初始化机器人；监听列表在连上微信后向 server 取
     robot = Robot(client, master_of=config.master_of)
+    server_client.on_server_down(robot.announce_server_down)
     return client, robot

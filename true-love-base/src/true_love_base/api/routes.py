@@ -127,8 +127,8 @@ async def send_file(request: dict[str, Any] | None = Body(default=None)) -> dict
 
     try:
         path = await download(url, SEND_FILES_DIR)
-    except Exception as e:
-        LOG.error("Failed to download file for [%s]: %s", receiver, e)
+    except Exception:
+        LOG.warning("Failed to download file for [%s]", receiver, exc_info=True)
         return ApiErrors.SEND_FAILED.to_dict()
 
     success = await _run_wx_operation(robot.send_file_msg, path, receiver)
@@ -165,7 +165,7 @@ async def add_listen(request: dict[str, Any] | None = Body(default=None)) -> dic
         success = await _run_wx_operation(robot.add_listen_chat, nickname)
         return ApiResponse.success({"success": success}).to_dict()
     except Exception as e:
-        LOG.error("AddListenChat failed for [%s]: %s", nickname, e)
+        LOG.exception("AddListenChat failed for [%s]", nickname)
         return ApiResponse.error(107, f"AddListenChat failed: {str(e)}").to_dict()
 
 
@@ -339,7 +339,7 @@ async def listen_probe(request: dict[str, Any] | None = Body(default=None)) -> d
     try:
         result = await _run_wx_operation(robot.client.probe_listen, chat_name)
     except Exception as e:
-        LOG.error("Probe failed for [%s]: %s", chat_name, e)
+        LOG.exception("Probe failed for [%s]", chat_name)
         return ApiResponse.error(107, f"Probe failed: {str(e)}").to_dict()
     if result is None:
         return ApiResponse.error(108, f"Sub window '{chat_name}' not found. Please add listener first.").to_dict()
@@ -504,7 +504,8 @@ def _execute_wx_operation(robot: "Robot", method_name: str, params: dict[str, An
     try:
         wx = robot.client.wx
     except Exception as e:
-        LOG.error("Failed to get wx instance: %s", e)
+        # 微信刚掉线时会这样，原因看异常就够了
+        LOG.warning("Failed to get wx instance: %s", e)
         return ApiResponse.error(101, "WeChat client not ready").to_dict()
 
     method = getattr(wx, method_name, None)
@@ -518,10 +519,11 @@ def _execute_wx_operation(robot: "Robot", method_name: str, params: dict[str, An
         LOG.info("wx.%s result: %s", method_name, str(serialized))
         return ApiResponse.success(serialized).to_dict()
     except TypeError as e:
-        LOG.error("wx.%s TypeError: %s", method_name, e)
+        # 多半是调用方传错了参数，原因看异常就够了
+        LOG.warning("wx.%s TypeError: %s", method_name, e)
         return ApiResponse.error(103, f"Invalid params: {str(e)}").to_dict()
     except Exception as e:
-        LOG.error("wx.%s execution failed: %s", method_name, e)
+        LOG.exception("wx.%s execution failed", method_name)
         return ApiResponse.error(107, f"Execution failed: {str(e)}").to_dict()
 
 
@@ -534,7 +536,8 @@ def _execute_chat_operation(
     try:
         wx = robot.client.wx
     except Exception as e:
-        LOG.error("Failed to get wx instance: %s", e)
+        # 微信刚掉线时会这样，原因看异常就够了
+        LOG.warning("Failed to get wx instance: %s", e)
         return ApiResponse.error(101, "WeChat client not ready").to_dict()
 
     try:
@@ -542,7 +545,7 @@ def _execute_chat_operation(
         if chat is None:
             return ApiResponse.error(108, f"Sub window '{chat_name}' not found. Please add listener first.").to_dict()
     except Exception as e:
-        LOG.error("GetSubWindow failed for [%s]: %s", chat_name, e)
+        LOG.exception("GetSubWindow failed for [%s]", chat_name)
         return ApiResponse.error(108, f"Failed to get sub window: {str(e)}").to_dict()
 
     method = getattr(chat, method_name, None)
@@ -556,9 +559,9 @@ def _execute_chat_operation(
         LOG.info("chat.%s result: %s", method_name, str(serialized))
         return ApiResponse.success(serialized).to_dict()
     except TypeError as e:
-        LOG.error("chat.%s TypeError: %s", method_name, e)
+        LOG.warning("chat.%s TypeError: %s", method_name, e)
         return ApiResponse.error(103, f"Invalid params: {str(e)}").to_dict()
     except Exception as e:
-        LOG.error("chat.%s execution failed: %s", method_name, e)
+        LOG.exception("chat.%s execution failed", method_name)
         return ApiResponse.error(107, f"Execution failed: {str(e)}").to_dict()
 

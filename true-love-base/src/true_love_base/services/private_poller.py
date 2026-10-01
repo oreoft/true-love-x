@@ -77,6 +77,10 @@ class PrivatePoller:
             return False
         if messages is None:
             return False
-        for message in messages:
-            self._on_message(message, message.chat_name)
+        try:
+            for message in messages:
+                self._on_message(message, message.chat_name)
+        except Exception:
+            LOG.exception("Failed to hand over %d polled messages from [%s]",
+                          len(messages), messages[0].chat_name if messages else "")
         return True

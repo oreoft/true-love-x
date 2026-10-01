@@ -21,6 +21,8 @@ from true_love_base.services import server_client
 from true_love_base.services.friend_acceptor import FriendAcceptor
 from true_love_base.services.private_poller import PrivatePoller
 
+LOG = logging.getLogger("Robot")
+
 
 class Robot:
     """
@@ -48,7 +50,7 @@ class Robot:
         self.client = client
         self._master = master
         self._master_of = master_of
-        self.LOG = logging.getLogger("Robot")
+        self.LOG = LOG
 
         # 消息处理线程池
         self._executor = ThreadPoolExecutor(
@@ -68,7 +70,7 @@ class Robot:
         # 群回复方式：勾了几种就在其中随机挑一种
         self.group_reply: list[str] = ["at"]
 
-        self.LOG.info(f"Robot initialized, max_workers: {self.MAX_WORKERS}")
+        self.LOG.info("Robot initialized, max_workers: %s", self.MAX_WORKERS)
 
     @property
     def master(self) -> str:
@@ -100,15 +102,16 @@ class Robot:
         try:
             with self._submission_lock:
                 if not self._accepting_messages:
-                    self.LOG.debug(
-                        "Discarding message during shutdown: chat=%s msg_id=%s",
+                    self.LOG.warning(
+                        "Discarding message during shutdown: chat=%s msg_hash=%s",
                         chat_name, getattr(msg, "msg_hash", "") or getattr(msg, "msg_id", ""),
                     )
                     return
-                self.LOG.info(f"Received message from [{chat_name}], submitting to thread pool")
+                self.LOG.info("Received message from [%s], submitting to thread pool", chat_name)
                 self._executor.submit(self._process_message, msg, chat_name)
-        except Exception as e:
-            self.LOG.error(f"Error submitting message to thread pool: {e}")
+        except Exception:
+            self.LOG.exception("Error submitting message to thread pool: chat=%s msg_hash=%s",
+                               chat_name, getattr(msg, "msg_hash", ""))
 
     def _process_message(self, msg: ChatMsg, chat_name: str) -> None:
         """
@@ -128,17 +131,26 @@ class Robot:
                 from true_love_common.observability.trace import set_trace_id
                 set_trace_id(msg.msg_hash or msg.msg_id or '-')
 
-                self.LOG.info(f"Processing message from [{chat_name}]: {msg}")
+                self.LOG.info("Processing message from [%s]: %s", chat_name, msg)
 
                 # 所有消息转发给 server，由 server 负责路由（存储 + 决定是否触发 AI）
                 error_reply = self.forward_msg(msg)
+                if not error_reply:
+                    return
 
                 # server 没接住就不会有 AI 回复，需要回复的消息由 base 直接提示用户
-                if error_reply and (msg.is_at_me or not msg.is_group):
-                    self.send_text_msg(error_reply, chat_name, msg.sender_id if msg.is_group else None)
+                replied = False
+                if msg.is_at_me or not msg.is_group:
+                    replied = self.send_text_msg(error_reply, chat_name, msg.sender_id if msg.is_group else None)
+                    if not replied:
+                        self.LOG.warning("Failure reply was not delivered: chat=%s msg_hash=%s",
+                                         chat_name, msg.msg_hash)
+                # 消息本身留着补发；已经提示用户重发的只存档
+                server_client.retry_later(msg, archive_only=replied)
 
-            except Exception as e:
-                self.LOG.error(f"Error processing message from [{chat_name}]: {e}")
+            except Exception:
+                self.LOG.exception("Error processing message from [%s]: msg_hash=%s",
+                                   chat_name, getattr(msg, "msg_hash", ""))
 
     # 监听添加重试配置
     LISTEN_ADD_RETRY_COUNT = 3
@@ -174,10 +186,11 @@ class Robot:
             try:
                 success = self.client.add_message_listener(chat_name, self.on_message)
                 if success:
-                    self.LOG.info(f"Started listening to [{chat_name}] (attempt {attempt})")
+                    self.LOG.info("Started listening to [%s] (attempt %s)", chat_name, attempt)
                     return True
                 else:
-                    self.LOG.warning(f"Failed to add listener for [{chat_name}] (attempt {attempt}/{max_attempts})")
+                    self.LOG.warning("Failed to add listener for [%s] (attempt %s/%s)",
+                                     chat_name, attempt, max_attempts)
             except Exception as e:
                 last_error = e
                 self.LOG.warning(
@@ -196,8 +209,8 @@ class Robot:
                     )
                     return False
 
-        self.LOG.error(
-            f"Failed to add listener for [{chat_name}] after {max_attempts} attempts. Last error: {last_error}")
+        self.LOG.error("Failed to add listener for [%s] after %s attempts. Last error: %s",
+                       chat_name, max_attempts, last_error)
         return False
 
     def load_listen_chats(
@@ -220,7 +233,7 @@ class Robot:
         # 旧 server 没有的设置用默认值：开关关闭，群里 @ 回复
         self.apply_settings({**{name: False for name in self._switchable()}, "group_reply": ["at"],
                              **setup.settings})
-        self.LOG.info(f"Loading {len(chats)} listen chats from server, settings: {self.settings()}")
+        self.LOG.info("Loading %s listen chats from server, settings: %s", len(chats), self.settings())
 
         success = []
         failed = []
@@ -277,10 +290,21 @@ class Robot:
     def _announce_new_friends(self, requests: list[str]) -> None:
         """自动通过了好友申请后告诉管理员"""
         if not self.master:
+            self.LOG.warning("Accepted friend requests but bot [%s] has no master to tell: %s",
+                             self.client.bot_id, requests)
             return
         lines = "\n".join(f"  {i + 1}. {text}" for i, text in enumerate(requests))
         if not self.send_text_msg(f"已自动通过 {len(requests)} 个好友申请：\n{lines}", self.master):
             self.LOG.warning("Friend acceptance notice was not delivered to [%s]", self.master)
+
+    def announce_server_down(self) -> None:
+        """连续转发失败、熔断器打开时告诉管理员一次"""
+        if not self.master:
+            self.LOG.warning("Server is down but bot [%s] has no master to tell", self.client.bot_id)
+            return
+        text = "tl-base 连不上 server，收到的消息先存在本地，恢复后补发"
+        if not self.send_text_msg(text, self.master):
+            self.LOG.warning("Server down notice was not delivered to [%s]", self.master)
 
     def cleanup(self) -> None:
         """
@@ -317,7 +341,7 @@ class Robot:
             return False
 
         at_list = [at_user] if at_user else None
-        self.LOG.info(f"Sending to [{receiver}]: {msg[:50]}...")
+        self.LOG.info("Sending to [%s]: %s...", receiver, msg[:50])
         if not reply_msg_id:
             return self.client.send_text(receiver, msg, at_list)
         style = random.choice(self.group_reply)
@@ -334,5 +358,5 @@ class Robot:
         Returns:
             是否发送成功
         """
-        self.LOG.info(f"Sending file to [{receiver}]: {path}")
+        self.LOG.info("Sending file to [%s]: %s", receiver, path)
         return self.client.send_file(receiver, path)

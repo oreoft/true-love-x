@@ -15,6 +15,8 @@ import yaml
 
 from true_love_common.observability.logging import LoggingConfig
 
+LOG = logging.getLogger("Config")
+
 
 class Config:
     """
@@ -49,8 +51,7 @@ class Config:
 
         Config._initialized = True
 
-        LOG = logging.getLogger("Config")
-        LOG.info(f"Config loaded: {len(self.bots)} bots configured")
+        LOG.info("Config loaded: %s bots configured", len(self.bots))
 
     def _setup_logging(self) -> None:
         """设置日志系统（从配置文件读取 Loki 配置）"""

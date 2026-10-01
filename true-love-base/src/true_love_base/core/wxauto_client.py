@@ -34,7 +34,7 @@ WxParam.CHAT_WINDOW_SIZE = (8000, 6000)
 _wx_imgs_dir = get_wx_imgs_dir()
 if _wx_imgs_dir:
     WxParam.DEFAULT_SAVE_PATH = _wx_imgs_dir
-    LOG.info(f"Set WxParam.DEFAULT_SAVE_PATH to: {_wx_imgs_dir}")
+    LOG.info("Set WxParam.DEFAULT_SAVE_PATH to: %s", _wx_imgs_dir)
 
 MessageCallback = Callable[[ChatMsg, str], None]
 
@@ -49,6 +49,8 @@ REPLY_KEEP_COUNT = 500
 TICKLE_SETTLE_SECONDS = 1.5
 # 不转给 server 的消息：微信团队、系统提示、自己发的
 _IGNORED_ATTRS = {"weixin", "system", "self"}
+# 消息转换或处理出错时回给对方的提示
+BROKEN_MESSAGE_REPLY = "啊咧？消息好像坏掉了，麻烦再发一次吧~"
 
 # SDK 操作界面的方法（发消息、加监听、切换会话）都在 ui_transaction 里执行，它可重入，跨线程也跨进程；
 # GetNextNewMessage 和会话右键菜单没有加锁，要自己包一层，免得轮询点开会话时正好有人在主窗口里发消息
@@ -195,12 +197,12 @@ class WxAutoClient():
             bool: 操作是否成功
         """
         if result:
-            LOG.info(f"[{action}] [{target}] succeeded")
+            LOG.info("[%s] [%s] succeeded", action, target)
             return True
         else:
             # WxResponse 失败时，通过 result['message'] 获取错误信息
             error_msg = result.get('message', 'Unknown error') if isinstance(result, dict) else str(result)
-            LOG.error(f"[{action}] [{target}] failed: {error_msg}")
+            LOG.error("[%s] [%s] failed: %s", action, target, error_msg)
             return False
 
     # ==================== 账号信息 ====================
@@ -251,19 +253,18 @@ class WxAutoClient():
 
         Args:
             reply_msg_id: 这条是在回复哪条群消息
-            reply_style: 怎么回复这条群消息：at 直接 @；tickle 先拍一拍再发，不管拍没拍成都不再 @；
+            reply_style: 怎么回复这条群消息：at 直接 @；tickle 先拍一拍再发，拍到了就不再 @，拍不了时照常 @；
                 quote 引用原消息，原消息已经不在监听窗口里或引用不了时照常 @ 发送
         """
         if reply_msg_id and reply_style != "at":
             raw_msg = self._replied_message(receiver, reply_msg_id, reply_style)
             if reply_style == "quote" and raw_msg is not None and self._quote(receiver, raw_msg, content):
                 return True
-            if reply_style == "tickle":
-                if raw_msg is not None:
-                    self._tickle(receiver, raw_msg)
+            # 拍到了就不再 @；拍不了时照常 @
+            if reply_style == "tickle" and raw_msg is not None and self._tickle(receiver, raw_msg):
                 at_list = None
         try:
-            LOG.debug(f"SendMsg content: {content[:50]}...")
+            LOG.debug("SendMsg content: %s...", content[:50])
             sub_window = self.wx.GetSubWindow(receiver)
             result = (
                 sub_window.SendMsg(content, at=at_list)
@@ -271,8 +272,8 @@ class WxAutoClient():
                 else self.wx.SendMsg(content, receiver, at=at_list)
             )
             return self._check_response(result, "SendMsg", receiver)
-        except Exception as e:
-            LOG.error(f"Failed to send text to [{receiver}]: {e}")
+        except Exception:
+            LOG.exception("Failed to send text to [%s]", receiver)
             return False
 
     def _replied_message(self, receiver: str, msg_id: str, style: str):
@@ -312,7 +313,7 @@ class WxAutoClient():
         try:
             raw_msg.tickle()
         except Exception:
-            LOG.warning("[Reply] [%s] tickling failed; sending the reply anyway", receiver, exc_info=True)
+            LOG.warning("[Reply] [%s] tickling failed; falling back to @", receiver, exc_info=True)
             return False
         LOG.info("[Reply] [%s] tickled the sender", receiver)
         # 等“拍了拍”的提示先出来，回复再跟在它后面
@@ -338,14 +339,14 @@ class WxAutoClient():
         if file_path.lower().endswith(self._AUDIO_EXTS):
             try:
                 return self._send_audio(receiver, file_path)
-            except Exception as e:
-                LOG.error(f"SendAudio failed for [{receiver}]: {e}")
+            except Exception:
+                LOG.exception("SendAudio failed for [%s]", receiver)
                 return False
         return self._send_file_generic(receiver, file_path)
 
     def _send_audio(self, receiver: str, file_path: str) -> bool:
         """[Beta] 发送语音条消息，需要 4.1.9+ 客户端"""
-        LOG.debug(f"SendAudio path: {file_path}")
+        LOG.debug("SendAudio path: %s", file_path)
         sub_window = self.wx.GetSubWindow(receiver)
         started = time.monotonic()
         result = sub_window.SendAudio(file_path) if sub_window else self.wx.SendAudio(file_path, who=receiver)
@@ -355,34 +356,40 @@ class WxAutoClient():
 
     def _send_file_generic(self, receiver: str, file_path: str) -> bool:
         try:
-            LOG.debug(f"SendFiles path: {file_path}")
+            LOG.debug("SendFiles path: %s", file_path)
             sub_window = self.wx.GetSubWindow(receiver)
             started = time.monotonic()
             result = sub_window.SendFiles(file_path) if sub_window else self.wx.SendFiles(file_path, receiver)
             if not result and sub_window and self._confirm_sent(receiver, file_path, started):
                 return True
             return self._check_response(result, "SendFiles", receiver)
-        except Exception as e:
-            LOG.error(f"Failed to send file to [{receiver}]: {e}")
+        except Exception:
+            LOG.exception("Failed to send file to [%s]", receiver)
             return False
 
     def _confirm_sent(self, receiver: str, file_path: str, started: float) -> bool:
         """
         SDK 报发送失败后，等监听里出现自己刚发出的这条消息；只有监听中的聊天能这样确认
 
-        文件消息的内容里带文件名，要求文件名对得上；图片、视频、语音的内容里没有文件名，出现就算
+        文件消息的内容里带文件名，要求文件名对得上；图片、视频、语音的内容里没有文件名，出现就算。
+        认领到的回显从记录里删掉，一条回显只能确认一次发送，免得把上一张图的回显认成这一张。
         """
         filename = os.path.basename(file_path)
         deadline = started + SEND_CONFIRM_SECONDS
         while True:
             with self._self_media_lock:
-                seen = list(self._self_media.get(receiver, []))
-            for at, kind, content in seen:
-                if at >= started and (kind != "file" or filename in content):
-                    LOG.warning(f"[SendFiles] [{receiver}] reported failure, but [{filename}] showed up "
-                                f"in the chat {at - started:.1f}s later; treating it as sent")
-                    return True
+                recent = self._self_media.get(receiver, [])
+                claimed = next((entry for entry in recent
+                                if entry[0] >= started and (entry[1] != "file" or filename in entry[2])), None)
+                if claimed is not None:
+                    recent.remove(claimed)
+            if claimed is not None:
+                LOG.warning("[SendFiles] [%s] reported failure, but [%s] showed up in the chat %.1fs later; "
+                            "treating it as sent", receiver, filename, claimed[0] - started)
+                return True
             if time.monotonic() >= deadline:
+                LOG.warning("[SendFiles] [%s] [%s] did not show up in the chat within %ss",
+                            receiver, filename, SEND_CONFIRM_SECONDS)
                 return False
             time.sleep(0.5)
 
@@ -454,7 +461,8 @@ class WxAutoClient():
 
         def internal_callback(raw_msg, chat):
             if not self._running:
-                LOG.debug("Discarding SDK callback during shutdown: chat=%s", chat_name)
+                LOG.warning("Discarding SDK callback during shutdown: chat=%s msg_hash=%s",
+                            chat_name, getattr(raw_msg, 'hash', ''))
                 return
             try:
                 LOG.info('--------------Start------------------')
@@ -463,7 +471,7 @@ class WxAutoClient():
                 if attr.lower() in _IGNORED_ATTRS:
                     if attr.lower() == 'self':
                         self._remember_self_media(chat_name, raw_msg)
-                    LOG.info(f"ignored system message attr is [{attr}]")
+                    LOG.info("ignored system message attr is [%s]", attr)
                     return
                 LOG.info('------------ Raw message info ------------\n%s', self._dump_obj_attrs(raw_msg))
                 LOG.info('------------ Raw chat info ------------\n%s', self._dump_obj_attrs(chat))
@@ -477,15 +485,19 @@ class WxAutoClient():
                 # 所有消息无脑转发给 server，由 server 负责存储和路由
                 callback(message, chat_name)
             except Exception:
-                LOG.exception("Error in message callback for [%s]", chat_name)
-                # 发送错误提示，避免用户感觉假死
-                try:
-                    result = self.wx.SendMsg("啊咧？消息好像坏掉了，麻烦再发一次吧~", chat_name)
-                    self._check_response(result, "SendCallbackErrorNotification", chat_name)
-                except Exception:
-                    LOG.exception("Failed to send callback error notification to [%s]", chat_name)
+                LOG.exception("Error in message callback for [%s]: msg_hash=%s",
+                              chat_name, getattr(raw_msg, 'hash', ''))
+                self._notify_broken_message(chat_name)
 
         return internal_callback
+
+    def _notify_broken_message(self, chat_name: str) -> None:
+        """消息转换或处理出错时提示对方重发，避免用户感觉假死"""
+        try:
+            result = self.wx.SendMsg(BROKEN_MESSAGE_REPLY, chat_name)
+            self._check_response(result, "SendCallbackErrorNotification", chat_name)
+        except Exception:
+            LOG.exception("Failed to send callback error notification to [%s]", chat_name)
 
     def add_message_listener(self, chat_name: str, callback: MessageCallback) -> bool:
         """添加消息监听器"""
@@ -494,7 +506,7 @@ class WxAutoClient():
                 LOG.info("Skipping listener registration during shutdown: %s", chat_name)
                 return False
             try:
-                LOG.info(f"Registering listener for [{chat_name}]")
+                LOG.info("Registering listener for [%s]", chat_name)
 
                 internal_callback = self._create_internal_callback(chat_name, callback)
                 with ui_transaction():
@@ -506,7 +518,7 @@ class WxAutoClient():
                 # AddListenChat 可能报成功但聊天窗口没有弹出来，这种监听收不到任何消息
                 window = self.wx.GetSubWindow(chat_name)
                 if window is None:
-                    LOG.error(f"[AddListenChat] [{chat_name}] reported success but its chat window is missing")
+                    LOG.error("[AddListenChat] [%s] reported success but its chat window is missing", chat_name)
                     return False
                 self._listen_windows[chat_name] = window._api.HWND
                 return True
@@ -568,7 +580,11 @@ class WxAutoClient():
         window = self.wx.GetSubWindow(chat_name)
         if window is None:
             return None
-        messages = window.GetAllMessage() or []
+        messages = window.GetAllMessage()
+        # 读失败时 SDK 不抛异常，返回一个"失败"的 WxResponse（是 dict 不是 list）
+        if not isinstance(messages, list):
+            reason = messages.get('message') if isinstance(messages, dict) else messages
+            raise RuntimeError(f"GetAllMessage failed: {reason}")
         last = messages[-1] if messages else None
         return {
             "count": len(messages),
@@ -590,21 +606,38 @@ class WxAutoClient():
         with ui_transaction():
             result = self.wx.GetNextNewMessage(filter_mute=True)
         if not result:
+            # 没有红点时是空的；读失败时是一个"失败"的 WxResponse
+            if isinstance(result, dict) and result.get("message"):
+                LOG.warning("Private poll failed: %s", result.get("message"))
             return None
         chat_name = result.get("chat_name", "")
-        chat_type = result.get("chat_type", "")
         raw_msgs = result.get("msg") or []
+        try:
+            return self._polled_messages(chat_name, result.get("chat_type", ""), raw_msgs)
+        except Exception:
+            # 红点已经点掉，这些消息不会再出现
+            LOG.exception("Private poll failed to handle %d messages from [%s]", len(raw_msgs), chat_name)
+            return []
+
+    def _polled_messages(self, chat_name: str, chat_type: str, raw_msgs: list) -> list[ChatMsg]:
         if chat_type != "friend":
-            LOG.info("Private poll skipped %d messages from [%s] (%s)", len(raw_msgs), chat_name, chat_type)
+            # 群该设成免打扰；点掉的红点里有消息就丢了，打 warning 方便发现
+            log = LOG.warning if raw_msgs else LOG.info
+            log("Private poll skipped %d messages from [%s] (chat_type=%r)", len(raw_msgs), chat_name, chat_type)
             return []
         messages = []
+        broken = 0
         for raw_msg in raw_msgs:
             if str(getattr(raw_msg, "attr", "")).lower() in _IGNORED_ATTRS:
                 continue
             try:
                 messages.append(convert_message(raw_msg, chat_name, bot_id=self._bot_id, bot_name=self._self_name))
             except Exception:
-                LOG.exception("Failed to convert a polled message from [%s]", chat_name)
+                broken += 1
+                LOG.exception("Failed to convert a polled message from [%s]: msg_hash=%s",
+                              chat_name, getattr(raw_msg, "hash", ""))
+        if broken:
+            self._notify_broken_message(chat_name)
         LOG.info("Private poll got %d messages from [%s]", len(messages), chat_name)
         return messages
 
@@ -667,10 +700,16 @@ class WxAutoClient():
                 for request in self.wx.GetNewFriends(acceptable=True) or []:
                     text = str(getattr(request, "content", "") or "")
                     try:
-                        request.accept()
-                        accepted.append(text)
+                        result = request.accept()
                     except Exception:
                         LOG.exception("Failed to accept friend request [%s]", text)
+                        continue
+                    # 失败时返回"失败"的 WxResponse；不返回结果（None）时没报错就算通过
+                    if result is not None and not result:
+                        LOG.warning("Failed to accept friend request [%s]: %s", text,
+                                    result.get('message') if isinstance(result, dict) else result)
+                        continue
+                    accepted.append(text)
             finally:
                 self.wx.SwitchToChat()
         if accepted:

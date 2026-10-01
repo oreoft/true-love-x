@@ -43,7 +43,8 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.sdk.IsOnline.return_value = True
         self.wechat_running = True
         self.server = types.SimpleNamespace(
-            get_chat=Mock(), fetch_listen_chats=Mock(return_value=setup([])), use_identity=Mock())
+            get_chat=Mock(), fetch_listen_chats=Mock(return_value=setup([])), use_identity=Mock(),
+            on_server_down=Mock(), stop_retrying=Mock())
 
         def open_wechat(**kwargs):
             if not self.wechat_running:
@@ -449,6 +450,41 @@ class ListenerLifecycleTests(unittest.TestCase):
             self.assertEqual(self.client.next_private_messages(), [])
         self.client_module.convert_message.assert_not_called()
 
+    def test_poll_warns_when_it_drops_messages_of_a_chat_that_is_not_private(self):
+        self.polled("group", "friend", chat_name="group")
+
+        with self.assertLogs("WxAutoClient", level="WARNING") as logs:
+            self.client.next_private_messages()
+
+        self.assertIn("1 messages", logs.output[0])
+
+    def test_polled_message_that_cannot_be_converted_is_reported_to_the_sender(self):
+        self.polled("friend", "friend", "friend")
+        converted = iter([RuntimeError("broken"), ("friend", "ok")])
+
+        def convert(raw, chat, **kwargs):
+            result = next(converted)
+            if isinstance(result, Exception):
+                raise result
+            return result
+
+        self.client_module.convert_message.side_effect = convert
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.assertEqual(self.client.next_private_messages(), [("friend", "ok")])
+
+        self.sdk.SendMsg.assert_called_once_with(self.client_module.BROKEN_MESSAGE_REPLY, "friend")
+
+    def test_listened_message_that_cannot_be_converted_is_reported_to_the_chat(self):
+        self.client_module.convert_message.side_effect = RuntimeError("broken")
+        callback = Mock()
+
+        with self.assertLogs("WxAutoClient", level="ERROR"):
+            self.client._create_internal_callback("group", callback)(Mock(attr="friend", id="m1"), object())
+
+        callback.assert_not_called()
+        self.sdk.SendMsg.assert_called_once_with(self.client_module.BROKEN_MESSAGE_REPLY, "group")
+
     def test_poll_reports_when_nothing_is_unread(self):
         self.sdk.GetNextNewMessage.return_value = {}
 
@@ -548,6 +584,18 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         self.sdk.GetNewFriends.assert_called_once_with(acceptable=True)
         self.sdk.SwitchToChat.assert_called_once_with()
+
+    def test_friend_request_the_sdk_could_not_accept_is_not_counted(self):
+        failure = type("Failure", (dict,), {"__bool__": lambda self: False})(status="失败", message="no button")
+        pending = [Mock(content="alice hi"), Mock(content="bob hello")]
+        pending[0].accept.return_value = None
+        pending[1].accept.return_value = failure
+        self.sdk.GetNewFriends.return_value = pending
+
+        with self.assertLogs("WxAutoClient", level="WARNING") as logs:
+            self.assertEqual(self.client.accept_new_friends(), ["alice hi"])
+
+        self.assertTrue(any("bob hello" in line for line in logs.output))
 
     def test_master_hears_who_was_accepted(self):
         robot = self.robot_module.Robot(self.client, master_of=lambda bot_id: "owner")
@@ -653,7 +701,7 @@ class ListenerLifecycleTests(unittest.TestCase):
 
                 self.sdk.SendMsg.assert_called_once_with("answer", "group", at=["alice"])
 
-    def test_tickle_reply_is_sent_without_at_even_when_the_pat_fails(self):
+    def test_tickle_reply_falls_back_to_at_when_the_pat_fails(self):
         cases = {
             "unknown id": lambda raw: "other",
             "tickle raised": lambda raw: setattr(raw.tickle, "side_effect", RuntimeError("gone")) or "m1",
@@ -666,7 +714,15 @@ class ListenerLifecycleTests(unittest.TestCase):
                 with self.assertLogs("WxAutoClient", level="INFO"):
                     self.assertTrue(self.client.send_text("group", "answer", ["alice"], reply_id, "tickle"))
 
-                self.sdk.SendMsg.assert_called_once_with("answer", "group", at=None)
+                self.sdk.SendMsg.assert_called_once_with("answer", "group", at=["alice"])
+
+    def test_one_echo_confirms_only_one_failed_send(self):
+        self.client_module.SEND_CONFIRM_SECONDS = 0
+        self.client._remember_self_media("group", Mock(type="image", content=""))
+
+        with self.assertLogs("WxAutoClient", level="WARNING"):
+            self.assertTrue(self.client._confirm_sent("group", "a.png", 0))
+            self.assertFalse(self.client._confirm_sent("group", "b.png", 0))
 
     def test_only_recent_messages_are_kept_for_replies(self):
         for i in range(self.client_module.REPLY_KEEP_COUNT + 5):
