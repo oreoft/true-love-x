@@ -12,7 +12,6 @@ Listen Manager - 监听管理器
 - 提供监听状态查询、增删、刷新、重置等功能
 """
 
-import asyncio
 import logging
 from . import base_client, listen_store
 
@@ -216,7 +215,9 @@ class ListenManager:
 
     async def reset_listener(self, chat_name: str) -> dict:
         """
-        重置单个监听：移除监听（SDK 会顺带关掉聊天窗口），再重新添加
+        重置单个监听：移除监听（SDK 会顺带关掉聊天窗口），马上重新添加
+
+        base 加监听时自己从会话右键菜单把聊天弹成独立窗口，不用先 ChatWith，也不用等界面稳定
 
         Args:
             chat_name: 聊天对象名称
@@ -228,9 +229,7 @@ class ListenManager:
             return {"success": False, "message": f"Chat [{chat_name}] not in listen list"}
 
         await self.remove_listen(chat_name, skip_store=True)
-        # 等界面稳定再重新添加
-        await asyncio.sleep(0.5)
-        result = await self.add_listen(chat_name, skip_store=True)
+        result = await self.base.add_listen_chat(chat_name)
         if result.get("success"):
             LOG.info(f"Reset listener for [{chat_name}] succeeded")
             return {"success": True, "message": f"Reset listener for [{chat_name}]"}

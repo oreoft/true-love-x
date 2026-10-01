@@ -95,7 +95,6 @@ class ListenManagerTests(ServerCase):
         self.assertTrue(result["success"])
         self.assertEqual(self.bases.sent(), [
             (f"{self.callback}/execute/wx", {"name": "RemoveListenChat", "params": {"nickname": "kept chat"}}),
-            (f"{self.callback}/execute/wx", {"name": "ChatWith", "params": {"who": "kept chat"}}),
             (f"{self.callback}/listen/add", {"nickname": "kept chat"}),
         ])
         self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat"])
