@@ -704,8 +704,8 @@ class WxAutoClient():
                     except Exception:
                         LOG.exception("Failed to accept friend request [%s]", text)
                         continue
-                    # 失败时返回"失败"的 WxResponse；不返回结果（None）时没报错就算通过
-                    if result is not None and not result:
+                    # accept 返回 WxResponse，失败时为假
+                    if not result:
                         LOG.warning("Failed to accept friend request [%s]: %s", text,
                                     result.get('message') if isinstance(result, dict) else result)
                         continue

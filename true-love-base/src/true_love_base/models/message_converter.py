@@ -132,7 +132,7 @@ def _download(raw_msg: Any, media_type: str, chat_name: str) -> Optional[str]:
     except Exception:
         LOG.warning("Failed to download %s from [%s]", media_type, chat_name, exc_info=True)
         return None
-    # 下载失败时 SDK 不一定抛异常，可能返回一个"失败"的 WxResponse
+    # 下载失败时 SDK 不抛异常，返回一个"失败"的 WxResponse
     if not full_path:
         LOG.warning("Failed to download %s from [%s]: %s", media_type, chat_name, _failure_message(full_path))
         return None

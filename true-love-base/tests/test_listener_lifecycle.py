@@ -588,7 +588,7 @@ class ListenerLifecycleTests(unittest.TestCase):
     def test_friend_request_the_sdk_could_not_accept_is_not_counted(self):
         failure = type("Failure", (dict,), {"__bool__": lambda self: False})(status="失败", message="no button")
         pending = [Mock(content="alice hi"), Mock(content="bob hello")]
-        pending[0].accept.return_value = None
+        pending[0].accept.return_value = {"status": "成功", "message": "", "data": None}
         pending[1].accept.return_value = failure
         self.sdk.GetNewFriends.return_value = pending
 
