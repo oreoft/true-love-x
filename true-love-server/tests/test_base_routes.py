@@ -84,6 +84,12 @@ class OnMessageTests(ServerCase):
         self.assertEqual(self.ai_calls, [])
         self.assertEqual(len(self.messages("wxid_m8s")), 1)
 
+    def test_message_resent_after_the_user_was_told_is_only_stored(self):
+        self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=message(is_at_me=True), archive_only=True)
+
+        self.assertEqual(self.ai_calls, [])
+        self.assertEqual(len(self.messages("wxid_m8s")), 1)
+
     def switch_on(self, bot_id, *kinds):
         self.register(bot_id)
         for kind in kinds:

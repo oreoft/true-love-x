@@ -24,14 +24,17 @@ LOG = logging.getLogger("MessageService")
 AI_UNAVAILABLE_REPLY = "啊哦~AI酱 暂时连不上，稍后再试试捏~"
 
 
-async def handle_incoming(bot: BotRecord, msg: ChatMsg) -> None:
-    """存储消息（best-effort）并按需触发 AI，两个逻辑互相独立"""
+async def handle_incoming(bot: BotRecord, msg: ChatMsg, archive_only: bool = False) -> None:
+    """存储消息（best-effort）并按需触发 AI，两个逻辑互相独立；archive_only 的只存档"""
     # 消息属于报上来的这个机器人，不信消息体里的 bot_id
     msg.bot_id = bot.bot_id
     is_new = await asyncio.to_thread(_save_message, bot.bot_id, msg)
     if not is_new:
         LOG.warning("重复消息已过滤，跳过 AI 触发: bot_id=%s msg_hash=%s sender_id=%s",
                     bot.bot_id, msg.msg_hash, msg.sender_id)
+        return
+    if archive_only:
+        LOG.info("补发的消息只存档，不交给 AI: bot_id=%s msg_hash=%s", bot.bot_id, msg.msg_hash)
         return
 
     # 判断要不要交给 AI、限额、限流、交给 AI 整段出错都按 AI 没接住处理，回一句免得用户以为机器人假死
