@@ -13,9 +13,9 @@ def transport(status=200):
 
 
 class QuietTests(unittest.IsolatedAsyncioTestCase):
-    async def call(self, url, **kwargs):
+    async def call(self, url, status=200, **kwargs):
         real = httpx.AsyncClient
-        with patch.object(client.httpx, "AsyncClient", lambda **kw: real(transport=transport(), **kw)):
+        with patch.object(client.httpx, "AsyncClient", lambda **kw: real(transport=transport(status), **kw)):
             return await client.async_post_json(url, {"token": "t"}, **kwargs)
 
     async def test_normal_calls_log_start_and_end(self):
@@ -33,6 +33,12 @@ class QuietTests(unittest.IsolatedAsyncioTestCase):
             with self.assertLogs(client.LOG, level="ERROR"):
                 result = await client.async_post_json("http://ai.test/admin/skill/list", {}, quiet=True)
         self.assertFalse(result.ok)
+
+    async def test_error_status_is_logged_as_warning_even_when_quiet(self):
+        with self.assertLogs(client.LOG, level="WARNING") as logs:
+            result = await self.call("http://ai.test/admin/skill/list", status=500, quiet=True)
+        self.assertFalse(result.ok)
+        self.assertEqual([r.levelname for r in logs.records], ["WARNING"])
 
 
 if __name__ == "__main__":
