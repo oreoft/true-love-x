@@ -138,13 +138,34 @@ class ListenPageTests(ServerCase):
     def test_listen_page_works_on_the_base_of_the_chosen_bot(self):
         callback = self.register("wxid_ser")
         listen_store.add("wxid_ser", "群A")
-        self.bases.reply(f"{callback}/execute/wx", {"code": 0, "data": [{"who": "群A"}]})
-        self.bases.reply(f"{callback}/execute/batch-chat-info",
-                         {"code": 0, "data": {"results": {"群A": {"success": True, "data": {"ok": 1}}}}})
+        listen_store.add("wxid_ser", "群B")
+        self.bases.reply(f"{callback}/listen/status",
+                         {"code": 0, "data": {"results": {"群A": None, "群B": "window_not_found"}}})
 
         data = self.get("/admin/bots/wxid_ser/listen/status")["data"]
 
-        self.assertEqual(data["summary"], {"healthy": 1, "unhealthy": 0})
+        self.assertEqual(data["summary"], {"healthy": 1, "unhealthy": 1})
+        self.assertEqual([(item["chat"], item["reason"]) for item in data["listeners"]],
+                         [("群A", None), ("群B", "window_not_found")])
+        self.assertEqual(self.bases.sent(), [(f"{callback}/listen/status", {"chat_names": ["群A", "群B"]})])
+
+    def test_listens_are_unhealthy_when_base_cannot_tell(self):
+        callback = self.register("wxid_ser")
+        listen_store.add("wxid_ser", "群A")
+        self.bases.reply(f"{callback}/listen/status", {"code": 102, "message": "WeChat offline"})
+
+        data = self.get("/admin/bots/wxid_ser/listen/status")["data"]
+
+        self.assertEqual(data["listeners"], [{"chat": "群A", "status": "unhealthy", "reason": "status_failed"}])
+
+    def test_probe_returns_what_base_read(self):
+        callback = self.register("wxid_ser")
+        last = {"sender": "alice", "type": "text", "content": "hi"}
+        self.bases.reply(f"{callback}/listen/probe", {"code": 0, "data": {"count": 3, "last": last}})
+
+        data = self.post("/admin/bots/wxid_ser/listen/probe", chat_name="群A")["data"]
+
+        self.assertEqual(data["data"], {"count": 3, "last": last})
 
     def test_switch_is_saved_and_pushed_to_the_base(self):
         callback = self.register("wxid_ser")

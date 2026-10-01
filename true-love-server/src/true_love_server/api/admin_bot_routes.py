@@ -247,10 +247,10 @@ async def listen_mute_all_groups(bot_id: str, request: dict = Body(default={})):
     return ApiResponse(data=result.get("data"))
 
 
-@admin_bot_router.post("/{bot_id}/listen/get-all-message")
-async def listen_get_all_message(bot_id: str, request: dict):
-    """测活：取聊天窗口里的所有消息"""
-    result = await _listen(bot_id).base.execute_chat(_chat_name(request), "GetAllMessage", {})
+@admin_bot_router.post("/{bot_id}/listen/probe")
+async def listen_probe(bot_id: str, request: dict):
+    """测活：读一遍聊天窗口里的消息，返回条数和最后一条"""
+    result = await _listen(bot_id).base.probe_listen(_chat_name(request))
     if not result.get("success"):
         raise ValidationException(result.get("message", "获取消息失败"))
     return ApiResponse(data=result)

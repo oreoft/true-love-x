@@ -58,7 +58,8 @@ class WeChatClient(BaseClient):
         payload = {"chat_name": chat_name, "name": method_name, "params": params or {}}
         return await self._call("execute_chat", "/execute/chat", payload)
 
-    async def batch_chat_info(self, chat_names: list[str]) -> dict:
-        if not chat_names:
-            return {"success": True, "data": {"results": {}}, "message": ""}
-        return await self._call("batch_chat_info", "/execute/batch-chat-info", {"chat_names": chat_names})
+    async def listen_status(self, chat_names: list[str]) -> dict:
+        return await self._call("listen_status", "/listen/status", {"chat_names": chat_names})
+
+    async def probe_listen(self, chat_name: str) -> dict:
+        return await self._call("probe_listen", "/listen/probe", {"chat_name": chat_name})

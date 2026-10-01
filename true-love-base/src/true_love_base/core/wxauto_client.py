@@ -65,6 +65,13 @@ def _init_uia_in_thread() -> None:
         _uia_thread.ready = True
 
 
+def _window_titled(hwnd: int, title: str) -> bool:
+    """这个窗口还在，标题也还是 title"""
+    import win32gui
+
+    return bool(win32gui.IsWindow(hwnd)) and win32gui.GetWindowText(hwnd) == title
+
+
 class WxAutoClient():
     """
     wxautox4 客户端适配器 封装 wxautox4 的所有操作。
@@ -96,6 +103,8 @@ class WxAutoClient():
         # 能拍一拍、引用回复的消息：{消息 id: (收到的时间, 聊天对象, SDK 消息对象)}，按收到的先后排
         self._replyable: OrderedDict[str, tuple[float, str, object]] = OrderedDict()
         self._replyable_lock = Lock()
+        # 每个监听注册时弹出的聊天窗口句柄：{聊天对象: HWND}，查监听状态时只看这个窗口还在不在
+        self._listen_windows: dict[str, int] = {}
 
     def connect(self) -> bool:
         """连接已登录的微信主窗口；微信没开或没登录时返回 False，由调用方稍后重试"""
@@ -126,6 +135,7 @@ class WxAutoClient():
             wx, self._wx = self._wx, None
         if wx is None:
             return
+        self._listen_windows.clear()
         self._self_name = ""
         self._state_since = datetime.now()
         # Do not hold the lifecycle lock while the SDK stops its listener threads.
@@ -488,13 +498,47 @@ class WxAutoClient():
                 if not self._check_response(result, "AddListenChat", chat_name):
                     return False
                 # AddListenChat 可能报成功但聊天窗口没有弹出来，这种监听收不到任何消息
-                if self.wx.GetSubWindow(chat_name) is None:
+                window = self.wx.GetSubWindow(chat_name)
+                if window is None:
                     LOG.error(f"[AddListenChat] [{chat_name}] reported success but its chat window is missing")
                     return False
+                self._listen_windows[chat_name] = window._api.HWND
                 return True
             except Exception:
                 LOG.exception("Failed to add listener for [%s]", chat_name)
                 return False
+
+    def listen_health(self, chat_names: list[str]) -> dict[str, Optional[str]]:
+        """
+        每个监听是否健康：注册时弹出的聊天窗口还在，标题也还是这个聊天对象
+
+        只读窗口句柄，不碰界面、不用抢界面锁。
+
+        Returns:
+            {聊天对象: 不健康的原因，健康时为 None}
+        """
+        result = {}
+        for name in chat_names:
+            hwnd = self._listen_windows.get(name)
+            if not hwnd:
+                result[name] = "not_listening"
+            elif not _window_titled(hwnd, name):
+                result[name] = "window_not_found"
+            else:
+                result[name] = None
+        return result
+
+    def probe_listen(self, chat_name: str) -> Optional[dict]:
+        """测活：读一遍聊天窗口里的消息，只返回条数和最后一条；没有这个聊天窗口时返回 None"""
+        window = self.wx.GetSubWindow(chat_name)
+        if window is None:
+            return None
+        messages = window.GetAllMessage() or []
+        last = messages[-1] if messages else None
+        return {
+            "count": len(messages),
+            "last": {"sender": last.sender, "type": last.type, "content": last.content} if last else None,
+        }
 
     # ==================== 私聊轮询 ====================
 

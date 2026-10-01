@@ -55,6 +55,60 @@ class WeChatDesktop:
         return self.sdk
 
 
+class ListenHealthTests(unittest.TestCase):
+    """A listen is healthy while the chat window it opened is still there under the chat's name."""
+
+    def setUp(self):
+        self.desktop = WeChatDesktop()
+        self.client = load_client_module(self.desktop).WxAutoClient(bot_id="win11-ser")
+        self.sdk = new_sdk()
+        self.sdk.GetSubWindow.side_effect = lambda name: Mock(_api=Mock(HWND={"room": 11, "friend": 22}[name]))
+        self.desktop.log_in(self.sdk)
+        self.assertTrue(self.client.connect())
+        # 桌面上现在的窗口：{句柄: 标题}
+        self.windows = {}
+        self.win32gui = module("win32gui", IsWindow=lambda hwnd: hwnd in self.windows,
+                               GetWindowText=lambda hwnd: self.windows[hwnd])
+
+    def health(self, *names):
+        with patch.dict(sys.modules, {"win32gui": self.win32gui}):
+            return self.client.listen_health(list(names))
+
+    def test_listen_is_judged_by_the_window_it_opened(self):
+        for name in ("room", "friend"):
+            self.assertTrue(self.client.add_message_listener(name, lambda msg, chat: None))
+        self.windows = {11: "room", 22: "someone else"}
+
+        self.assertEqual(self.health("room", "friend", "never added"),
+                         {"room": None, "friend": "window_not_found", "never added": "not_listening"})
+
+    def test_closed_window_is_unhealthy(self):
+        self.client.add_message_listener("room", lambda msg, chat: None)
+
+        self.assertEqual(self.health("room"), {"room": "window_not_found"})
+
+    def test_listens_are_forgotten_when_wechat_drops(self):
+        self.client.add_message_listener("room", lambda msg, chat: None)
+        self.windows = {11: "room"}
+        self.client.disconnect()
+        self.desktop.log_in(self.sdk)
+        self.client.connect()
+
+        self.assertEqual(self.health("room"), {"room": "not_listening"})
+
+    def test_probe_reports_the_count_and_the_last_message(self):
+        message = types.SimpleNamespace(sender="alice", type="text", content="hi")
+        self.sdk.GetSubWindow.side_effect = lambda name: Mock(GetAllMessage=Mock(return_value=[message, message]))
+
+        self.assertEqual(self.client.probe_listen("room"),
+                         {"count": 2, "last": {"sender": "alice", "type": "text", "content": "hi"}})
+
+    def test_probe_without_a_window_returns_nothing(self):
+        self.sdk.GetSubWindow.side_effect = lambda name: None
+
+        self.assertIsNone(self.client.probe_listen("room"))
+
+
 def load_client_module(desktop, real_converter=False):
     """Load the real client with only the Windows SDK replaced; optionally keep the real message converter."""
     dependencies = {
@@ -557,7 +611,8 @@ class RoutesTests(unittest.TestCase):
             "add_listen": {"nickname": "alice"},
             "execute_wx": {"name": "GetMyInfo"},
             "execute_chat": {"chat_name": "alice", "name": "ChatInfo"},
-            "batch_chat_info": {"chat_names": ["alice"]},
+            "listen_status": {"chat_names": ["alice"]},
+            "listen_probe": {"chat_name": "alice"},
         }
         for endpoint, body in requests.items():
             with self.subTest(endpoint=endpoint):

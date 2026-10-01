@@ -24,7 +24,7 @@ const AUTO_AI = [
 ];
 // 群回复方式：[值, 名称]，勾几个就在其中随机挑
 const REPLY_STYLES = [['at', '@ 回复'], ['tickle', '拍一拍'], ['quote', '引用回复']];
-const REASONS = { window_not_found: '窗口丢失', get_windows_failed: '取不到窗口', chat_info_failed: '窗口无响应' };
+const REASONS = { window_not_found: '窗口丢失', not_listening: '没在监听', status_failed: '取不到状态' };
 
 // 当前标签；切标签只重画，不重新拉数据
 let tab = 'listen';
@@ -59,7 +59,7 @@ export async function show(root, ctx) {
             root.style.pointerEvents = '';
         }
     };
-    // 监听状态要 base 逐个检查窗口，监听多时要等好几秒，所以改设置后只重新拉设置
+    // 改设置后只重新拉设置，不用再查一遍监听状态
     const reload = () => dimmed(() => show(root, ctx));
     const reloadSettings = () => dimmed(async () => {
         try {
@@ -134,7 +134,7 @@ export async function show(root, ctx) {
             reload();
         };
         $('#resetAll', root).onclick = (e) => confirmModal('重置全部监听？',
-            '会关掉所有子窗口再逐个重新监听，期间可能漏收几秒消息。', async () => {
+            '会逐个移除再重新添加监听，期间可能漏收几秒消息。', async () => {
                 const result = await busy(e.target, '重置中…', () => attempt(() => api.listenResetAll()));
                 if (result) toast(result.message);
                 reload();
@@ -143,7 +143,9 @@ export async function show(root, ctx) {
             const chat = listeners[el.dataset.probe].chat;
             el.onclick = async () => {
                 const result = await busy(el, '测活中…', () => attempt(() => api.listenProbe(chat)));
-                if (result) toast(`${chat} 能取到 ${(result.data || []).length} 条消息`);
+                if (!result) return;
+                const { count, last } = result.data || {};
+                toast(last ? `${chat} 能取到 ${count} 条消息，最后一条：${last.sender}：${last.content}` : `${chat} 窗口里没有消息`);
             };
         });
         $$('[data-reset]', root).forEach((el) => {

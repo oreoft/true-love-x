@@ -78,6 +78,28 @@ class ListenManagerTests(ServerCase):
         self.assertTrue(result["success"])
         self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat"])
 
+    def test_reset_removes_the_listen_and_adds_it_again(self):
+        self.base_answers(True)
+
+        result = self.run_async(self.manager.reset_listener("kept chat"))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(self.bases.sent(), [
+            (f"{self.callback}/execute/wx", {"name": "RemoveListenChat", "params": {"nickname": "kept chat"}}),
+            (f"{self.callback}/execute/wx", {"name": "ChatWith", "params": {"who": "kept chat"}}),
+            (f"{self.callback}/listen/add", {"nickname": "kept chat"}),
+        ])
+        self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat"])
+
+    def test_reset_all_resets_every_saved_chat(self):
+        self.base_answers(True)
+
+        result = self.run_async(self.manager.reset_all_listeners())
+
+        self.assertEqual((result["recovered"], result["failed"]), (["deleted chat", "kept chat"], []))
+        self.assertEqual([payload for url, payload in self.bases.sent() if url.endswith("/listen/add")],
+                         [{"nickname": "deleted chat"}, {"nickname": "kept chat"}])
+
     def test_adding_a_listen_waits_for_base_to_finish_its_retries(self):
         seen = {}
         post = self.bases.post

@@ -37,13 +37,13 @@ class ListenManager:
     async def get_listener_status(self) -> dict:
         """
         获取监听状态
-        
-        通过 Base 的 execute 接口检查每个监听的健康状态。
-        
+
+        base 只看每个监听注册时弹出的聊天窗口还在不在、标题对不对，不碰界面，很快。
+
         状态定义：
-        - healthy: 子窗口存在 AND ChatInfo 能正确响应
-        - unhealthy: 子窗口不存在 OR ChatInfo 无法响应
-        
+        - healthy: 聊天窗口还在
+        - unhealthy: base 没注册过它（not_listening），或者窗口已经没了（window_not_found）
+
         Returns:
             状态结果，包含 listeners 和 summary
         """
@@ -52,69 +52,23 @@ class ListenManager:
         if not db_chats:
             return {"listeners": [], "summary": {"healthy": 0, "unhealthy": 0}}
 
-        # 通过 execute/wx 调用 GetAllSubWindow
-        result = await self.base.execute_wx("GetAllSubWindow", {})
+        result = await self.base.listen_status(db_chats)
         if not result.get("success"):
-            LOG.error(f"GetAllSubWindow failed: {result.get('message')}")
-            # 获取失败，所有标记为 unhealthy
-            return {
-                "listeners": [
-                    {"chat": c, "status": "unhealthy", "reason": "get_windows_failed"}
-                    for c in db_chats
-                ],
-                "summary": {"healthy": 0, "unhealthy": len(db_chats)}
-            }
-
-        # 解析窗口列表，提取窗口名称
-        sub_windows = result.get("data", []) or []
-        window_names = set()
-        for w in sub_windows:
-            # w 可能是 dict 或对象序列化后的结果
-            who = w.get("who") if isinstance(w, dict) else None
-            if who:
-                window_names.add(who)
-
-        LOG.debug(f"GetAllSubWindow returned {len(window_names)} windows: {window_names}")
-
-        # 筛选出存在子窗口的 chat，用于批量查询 ChatInfo
-        chats_with_window = [c for c in db_chats if c in window_names]
-        chats_without_window = [c for c in db_chats if c not in window_names]
-
-        # 批量获取 ChatInfo（一次请求获取所有）
-        chat_info_results = {}
-        if chats_with_window:
-            batch_result = await self.base.batch_chat_info(chats_with_window)
-            if batch_result.get("success") and batch_result.get("data"):
-                chat_info_results = batch_result["data"].get("results", {})
-            else:
-                LOG.warning(f"batch_chat_info failed: {batch_result.get('message')}")
+            LOG.error(f"listen_status failed: {result.get('message')}")
+            reasons = {c: "status_failed" for c in db_chats}
+        else:
+            reasons = (result.get("data") or {}).get("results", {})
 
         listeners = []
         summary = {"healthy": 0, "unhealthy": 0}
-
-        # 处理没有子窗口的 chat
-        for chat_name in chats_without_window:
-            listeners.append({
-                "chat": chat_name, 
-                "status": "unhealthy", 
-                "reason": "window_not_found"
-            })
-            summary["unhealthy"] += 1
-
-        # 处理有子窗口的 chat
-        for chat_name in chats_with_window:
-            status_info = {"chat": chat_name, "status": None, "reason": None}
-            
-            chat_result = chat_info_results.get(chat_name, {})
-            if chat_result.get("success") and chat_result.get("data"):
-                status_info["status"] = "healthy"
+        for chat_name in db_chats:
+            reason = reasons.get(chat_name, "not_listening")
+            if reason is None:
+                listeners.append({"chat": chat_name, "status": "healthy", "reason": None})
                 summary["healthy"] += 1
             else:
-                status_info["status"] = "unhealthy"
-                status_info["reason"] = chat_result.get("reason", "chat_info_failed")
+                listeners.append({"chat": chat_name, "status": "unhealthy", "reason": reason})
                 summary["unhealthy"] += 1
-
-            listeners.append(status_info)
 
         LOG.info(f"Listener status: {summary}")
         return {"listeners": listeners, "summary": summary}
@@ -262,163 +216,54 @@ class ListenManager:
 
     async def reset_listener(self, chat_name: str) -> dict:
         """
-        重置单个监听
-        
-        流程：
-        1. 切换到 SwitchToChat
-        2. 关闭子窗口
-        3. 调用 remove_listen (skip_store=True)
-        4. 等待 UI 稳定
-        5. 调用 add_listen (skip_store=True)
-        
+        重置单个监听：移除监听（SDK 会顺带关掉聊天窗口），再重新添加
+
         Args:
             chat_name: 聊天对象名称
-            
+
         Returns:
-            {"success": bool, "message": str, "steps": list}
+            {"success": bool, "message": str}
         """
         if not listen_store.exists(self.bot_id, chat_name):
-            return {"success": False, "message": f"Chat [{chat_name}] not in listen list", "steps": []}
+            return {"success": False, "message": f"Chat [{chat_name}] not in listen list"}
 
-        steps = []
-
-        # Step 1: 切换到聊天页面
-        try:
-            result = await self.base.execute_wx("SwitchToChat", {})
-            steps.append({"step": "switch_to_chat", "success": result.get("success", False)})
-        except Exception as e:
-            steps.append({"step": "switch_to_chat", "success": False, "error": str(e)})
-
-        # Step 2: 尝试关闭子窗口（幂等操作）
-        try:
-            result = await self.base.execute_chat(chat_name, "Close", {})
-            steps.append({"step": "close_window", "success": result.get("success", False)})
-        except Exception as e:
-            steps.append({"step": "close_window", "success": False, "error": str(e)})
-
-        # Step 3: 移除监听（skip_store=True，不删除数据库记录）
-        try:
-            result = await self.remove_listen(chat_name, skip_store=True)
-            steps.append({"step": "remove_listen", "success": result.get("success", False)})
-        except Exception as e:
-            steps.append({"step": "remove_listen", "success": False, "error": str(e)})
-
-        # Step 4: 等待 UI 稳定
+        await self.remove_listen(chat_name, skip_store=True)
+        # 等界面稳定再重新添加
         await asyncio.sleep(0.5)
-        steps.append({"step": "wait", "success": True, "duration": 0.5})
-
-        # Step 5: 重新添加监听（skip_store=True，不重复写入数据库记录）
-        try:
-            result = await self.add_listen(chat_name, skip_store=True)
-            steps.append({"step": "add_listen", "success": result.get("success", False)})
-
-            if result.get("success"):
-                LOG.info(f"Reset listener for [{chat_name}] succeeded")
-                return {"success": True, "message": f"Reset listener for [{chat_name}]", "steps": steps}
-            else:
-                LOG.error(f"Failed to re-add listener for [{chat_name}]: {result.get('message')}")
-                return {"success": False, "message": f"Failed to re-add listener: {result.get('message')}",
-                        "steps": steps}
-        except Exception as e:
-            steps.append({"step": "add_listen", "success": False, "error": str(e)})
-            LOG.error(f"Exception re-adding listener for [{chat_name}]: {e}")
-            return {"success": False, "message": str(e), "steps": steps}
+        result = await self.add_listen(chat_name, skip_store=True)
+        if result.get("success"):
+            LOG.info(f"Reset listener for [{chat_name}] succeeded")
+            return {"success": True, "message": f"Reset listener for [{chat_name}]"}
+        LOG.error(f"Failed to re-add listener for [{chat_name}]: {result.get('message')}")
+        return {"success": False, "message": f"Failed to re-add listener: {result.get('message')}"}
 
     async def reset_all_listeners(self) -> dict:
         """
-        重置所有监听
-        
-        流程：
-        1. 把所有子窗口都关掉
-        2. 切换页面刷新 UI（联系人和对话来回切一下）
-        3. 挨个调用 reset_listener（虽然里面也会关闭子窗口，但是没关系，幂等的）
-        
+        重置所有监听：逐个重置
+
         Returns:
-            {"success": bool, "message": str, "total": int, "recovered": list, "failed": list, "steps": list}
+            {"success": bool, "message": str, "total": int, "recovered": list, "failed": list}
         """
         db_chats = listen_store.list_all(self.bot_id)
-
-        if not db_chats:
-            return {
-                "success": True,
-                "message": "No listeners in config",
-                "total": 0,
-                "recovered": [],
-                "failed": [],
-                "steps": []
-            }
-
-        steps = []
         recovered = []
         failed = []
 
         LOG.info(f"Starting reset all listeners, total: {len(db_chats)}")
-
-        # Step 1: 关闭所有子窗口
-        closed_count = 0
-        try:
-            result = await self.base.execute_wx("GetAllSubWindow", {})
-            if result.get("success"):
-                sub_windows = result.get("data", []) or []
-                for w in sub_windows:
-                    who = w.get("who") if isinstance(w, dict) else None
-                    if who:
-                        close_result = await self.base.execute_chat(who, "Close", {})
-                        if close_result.get("success"):
-                            closed_count += 1
-            steps.append({"step": "close_all_windows", "success": True, "closed": closed_count})
-            LOG.info(f"Closed {closed_count} sub windows")
-        except Exception as e:
-            steps.append({"step": "close_all_windows", "success": False, "error": str(e)})
-            LOG.warning(f"Failed to close sub windows: {e}")
-
-        # Step 2: 切换页面刷新 UI（联系人和对话来回切一下）
-        try:
-            await self.base.execute_wx("SwitchToContact", {})
-            await asyncio.sleep(0.3)
-            await self.base.execute_wx("SwitchToChat", {})
-            await asyncio.sleep(0.3)
-            steps.append({"step": "switch_pages", "success": True})
-            LOG.info("Switched pages to refresh UI")
-        except Exception as e:
-            steps.append({"step": "switch_pages", "success": False, "error": str(e)})
-            LOG.warning(f"Failed to switch pages: {e}")
-
-        # Step 3: 挨个调用 reset_listener（幂等操作）
         for chat_name in db_chats:
-            try:
-                result = await self.reset_listener(chat_name)
-                if result.get("success"):
-                    recovered.append(chat_name)
-                    LOG.info(f"Reset listener for [{chat_name}] succeeded")
-                else:
-                    failed.append(chat_name)
-                    LOG.error(f"Reset listener for [{chat_name}] failed: {result.get('message')}")
-            except Exception as e:
-                failed.append(chat_name)
-                LOG.error(f"Exception resetting listener for [{chat_name}]: {e}")
+            result = await self.reset_listener(chat_name)
+            (recovered if result.get("success") else failed).append(chat_name)
 
-        steps.append({
-            "step": "reset_listeners",
-            "success": len(failed) == 0,
-            "recovered": len(recovered),
-            "failed": len(failed)
-        })
-
-        success = len(failed) == 0
         message = f"Reset complete: {len(recovered)}/{len(db_chats)} recovered"
         if failed:
             message += f", {len(failed)} failed"
-
         LOG.info(message)
 
         return {
-            "success": success,
+            "success": not failed,
             "message": message,
             "total": len(db_chats),
             "recovered": recovered,
             "failed": failed,
-            "steps": steps
         }
 
 

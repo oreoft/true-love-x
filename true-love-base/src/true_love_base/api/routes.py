@@ -292,37 +292,58 @@ async def execute_chat(request: dict[str, Any] | None = Body(default=None)) -> d
     return await _run_wx_operation(_execute_chat_operation, robot, chat_name, method_name, params)
 
 
-@router.post("/execute/batch-chat-info")
-async def batch_chat_info(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+@router.post("/listen/status")
+async def listen_status(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
     """
-    批量获取 Chat 的 ChatInfo
-
-    一次性获取多个聊天窗口的状态信息，避免多次请求。
+    查监听是否健康：注册时弹出的聊天窗口还在、标题也还是这个聊天对象，只读窗口句柄，很快
 
     Request Body:
         - chat_names: 聊天对象名称列表
 
     Response:
-        - data: {
-            "results": {
-                "chat_name1": {"success": true, "data": {...}},
-                "chat_name2": {"success": false, "reason": "window_not_found"},
-                ...
-            }
-        }
+        - data: {"results": {"chat_name1": null, "chat_name2": "window_not_found", ...}}
+          值是不健康的原因，健康时为 null；not_listening 表示 base 这次连上微信后没注册过它
     """
     robot = _get_robot()
     unavailable = _unavailable(robot)
     if unavailable is not None:
         return unavailable
 
-    data = _payload(request)
-    chat_names = data.get("chat_names", [])
-
+    chat_names = _payload(request).get("chat_names", [])
     if not chat_names or not isinstance(chat_names, list):
         return ApiResponse.error(103, "Missing or invalid 'chat_names' parameter").to_dict()
 
-    return await _run_wx_operation(_batch_chat_info_operation, robot, chat_names)
+    return ApiResponse.success({"results": robot.client.listen_health(chat_names)}).to_dict()
+
+
+@router.post("/listen/probe")
+async def listen_probe(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    """
+    测活：读一遍聊天窗口里的消息
+
+    Request Body:
+        - chat_name: 聊天对象名称
+
+    Response:
+        - data: {"count": 消息条数, "last": {"sender", "type", "content"} 或 null}
+    """
+    robot = _get_robot()
+    unavailable = _unavailable(robot)
+    if unavailable is not None:
+        return unavailable
+
+    chat_name = _payload(request).get("chat_name", "")
+    if not chat_name:
+        return ApiErrors.INVALID_PARAMS.to_dict()
+
+    try:
+        result = await _run_wx_operation(robot.client.probe_listen, chat_name)
+    except Exception as e:
+        LOG.error("Probe failed for [%s]: %s", chat_name, e)
+        return ApiResponse.error(107, f"Probe failed: {str(e)}").to_dict()
+    if result is None:
+        return ApiResponse.error(108, f"Sub window '{chat_name}' not found. Please add listener first.").to_dict()
+    return ApiResponse.success(result).to_dict()
 
 
 def _get_robot() -> Optional["Robot"]:
@@ -541,28 +562,3 @@ def _execute_chat_operation(
         LOG.error("chat.%s execution failed: %s", method_name, e)
         return ApiResponse.error(107, f"Execution failed: {str(e)}").to_dict()
 
-
-def _batch_chat_info_operation(robot: "Robot", chat_names: list[str]) -> dict[str, Any]:
-    try:
-        wx = robot.client.wx
-    except Exception as e:
-        LOG.error("Failed to get wx instance: %s", e)
-        return ApiResponse.error(101, "WeChat client not ready").to_dict()
-
-    results = {}
-    for chat_name in chat_names:
-        try:
-            chat = wx.GetSubWindow(chat_name)
-            if chat is None:
-                results[chat_name] = {"success": False, "reason": "window_not_found"}
-                continue
-
-            chat_info = chat.ChatInfo()
-            serialized = serialize_result(chat_info)
-            results[chat_name] = {"success": True, "data": serialized}
-        except Exception as e:
-            LOG.error("batch_chat_info failed for [%s]: %s", chat_name, e)
-            results[chat_name] = {"success": False, "reason": str(e)}
-
-    LOG.info("batch_chat_info completed for %d chats", len(chat_names))
-    return ApiResponse.success({"results": results}).to_dict()
