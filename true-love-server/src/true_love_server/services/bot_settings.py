@@ -11,6 +11,7 @@ Bot Settings - 机器人设置
 群里不 @ 也交给 AI 的设置只有 server 用，不发给 base。每种消息一个开关、一个疲劳限制：
 - auto_ai_<类型>：开关，类型见 AUTO_AI_TYPES（链接、PDF 文件、图片、笔记）
 - auto_ai_<类型>_limit：{"count": 条数, "seconds": 秒数}，同一个群里这种消息每 seconds 秒最多自动交给 AI count 条
+- ai_rate_limit：{"count": 次数, "seconds": 秒数}，同一个人在同一个会话里找 AI 的限频（见 ai_rate_limit）
 """
 
 import logging
@@ -29,6 +30,10 @@ AUTO_AI_TYPES = ("link", "file", "image", "note")
 AUTO_AI_SWITCHES = tuple(f"auto_ai_{kind}" for kind in AUTO_AI_TYPES)
 AUTO_AI_LIMITS = tuple(f"auto_ai_{kind}_limit" for kind in AUTO_AI_TYPES)
 DEFAULT_AUTO_AI_LIMIT = {"count": 5, "seconds": 600}
+AI_RATE_LIMIT = "ai_rate_limit"
+DEFAULT_AI_RATE_LIMIT = {"count": 6, "seconds": 180}
+# 后台能设的限频，和各自的默认值；都只有 server 用
+LIMITS = {**{key: DEFAULT_AUTO_AI_LIMIT for key in AUTO_AI_LIMITS}, AI_RATE_LIMIT: DEFAULT_AI_RATE_LIMIT}
 
 
 def get_bool(bot_id: str, key: str, default: bool = False) -> bool:
@@ -50,21 +55,21 @@ def wechat_settings(bot_id: str) -> dict:
 
 
 def get_limit(bot_id: str, key: str) -> dict:
-    """疲劳限制，存的是"条数,秒数"，没设过用 DEFAULT_AUTO_AI_LIMIT"""
+    """限频设置，存的是"条数,秒数"，没设过用 LIMITS 里的默认值"""
     with bot_session(bot_id) as db:
         row = db.get(BotSetting, key)
     try:
         count, seconds = (int(part) for part in row.value.split(","))
         return {"count": count, "seconds": seconds}
     except (AttributeError, ValueError):
-        return dict(DEFAULT_AUTO_AI_LIMIT)
+        return dict(LIMITS[key])
 
 
 def admin_settings(bot_id: str) -> dict:
-    """后台看到的全部设置：微信设置加上群里自动交给 AI 的开关和疲劳限制"""
+    """后台看到的全部设置：微信设置，加上群里自动交给 AI 的开关和各种限频"""
     return {**wechat_settings(bot_id),
             **{key: get_bool(bot_id, key) for key in AUTO_AI_SWITCHES},
-            **{key: get_limit(bot_id, key) for key in AUTO_AI_LIMITS}}
+            **{key: get_limit(bot_id, key) for key in LIMITS}}
 
 
 def set_bool(bot_id: str, key: str, value: bool) -> None:

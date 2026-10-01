@@ -1,7 +1,7 @@
 /**
  * 监听管理（微信专属），分两个标签：
  * - 监听：看每个监听是否健康，测活、重置、移除、添加
- * - 微信设置：私聊轮询（和一键群免打扰）、自动通过好友申请、群里不 @ 也交给 AI 的消息和它们的疲劳限制、群回复方式
+ * - 微信设置：私聊轮询（和一键群免打扰）、自动通过好友申请、个人找 AI 的限频、群里不 @ 也交给 AI 的消息和它们的疲劳限制、群回复方式
  *
  * 这些操作都要调 base，base 离线时按钮变灰；设置离线时也能改，base 下次连上微信时生效。
  */
@@ -88,6 +88,10 @@ export async function show(root, ctx) {
             <button class="add" id="add" ${disabled}>＋ 添加监听</button>
         </div>`;
 
+    const limitInputs = (name, limit, unit) => `
+            <label>每 <input type="number" min="1" step="1" style="width:5em" data-limit-seconds="${name}" value="${limit.seconds}"> 秒最多
+                <input type="number" min="1" step="1" style="width:4em" data-limit-count="${name}" value="${limit.count}"> ${unit}</label>`;
+
     const settingsTab = () => settingsError ? `<div class="banner">没取到微信设置：${esc(settingsError)}</div>` : `
         ${SWITCHES.map(([key, label, hint]) => `
         <div class="listen-settings">
@@ -96,6 +100,12 @@ export async function show(root, ctx) {
             <button class="btn sm" data-switch="${key}">${settings[key] ? '关闭' : '打开'}</button>
             ${key === 'private_poll' ? `<button class="btn sm" id="muteGroups" ${disabled}>一键群免打扰</button>` : ''}
         </div>`).join('')}
+        <div class="listen-settings">
+            <span>个人找 AI 限频</span>
+            <span class="muted grow">同一个人在同一个群或私聊里找 AI 的上限，@、私聊和上面自动交给 AI 的都算；超了先回一句"太快啦"，之后只存不回</span>
+            ${limitInputs('rate', settings.ai_rate_limit || { count: 6, seconds: 180 }, '次')}
+            <button class="btn sm" data-save-limit="rate">保存限制</button>
+        </div>
         ${AUTO_AI.map(([kind, label, hint]) => {
             const on = settings[`auto_ai_${kind}`];
             const limit = settings[`auto_ai_${kind}_limit`] || { count: 5, seconds: 600 };
@@ -103,8 +113,7 @@ export async function show(root, ctx) {
         <div class="listen-settings">
             <span>群${label}自动交给 AI <span class="pill ${on ? 'ok' : ''}">${on ? '开' : '关'}</span></span>
             <span class="muted grow">${hint}</span>
-            <label>每 <input type="number" min="1" step="1" style="width:5em" data-limit-seconds="${kind}" value="${limit.seconds}"> 秒最多
-                <input type="number" min="1" step="1" style="width:4em" data-limit-count="${kind}" value="${limit.count}"> 条</label>
+            ${limitInputs(kind, limit, '条')}
             <button class="btn sm" data-save-limit="${kind}">保存限制</button>
             <button class="btn sm" data-auto-ai="${kind}">${on ? '关闭' : '打开'}</button>
         </div>`;
@@ -188,7 +197,8 @@ export async function show(root, ctx) {
         });
         $$('[data-save-limit]', root).forEach((el) => {
             const kind = el.dataset.saveLimit;
-            const [, label] = AUTO_AI.find(([name]) => name === kind);
+            const isRate = kind === 'rate';
+            const key = isRate ? 'ai_rate_limit' : `auto_ai_${kind}_limit`;
             el.onclick = async () => {
                 const seconds = Number($(`[data-limit-seconds="${kind}"]`, root).value);
                 const count = Number($(`[data-limit-count="${kind}"]`, root).value);
@@ -196,9 +206,11 @@ export async function show(root, ctx) {
                     toast('秒数和条数都要是正整数', 'error');
                     return;
                 }
-                const result = await busy(el, '保存中…',
-                    () => attempt(() => api.listenSaveSettings({ [`auto_ai_${kind}_limit`]: { count, seconds } })));
-                if (result) toast(`群${label}：同一个群每 ${seconds} 秒最多自动回 ${count} 条`);
+                const result = await busy(el, '保存中…', () => attempt(() => api.listenSaveSettings({ [key]: { count, seconds } })));
+                if (result) {
+                    toast(isRate ? `同一个人每 ${seconds} 秒最多找 AI ${count} 次`
+                        : `群${AUTO_AI.find(([name]) => name === kind)[1]}：同一个群每 ${seconds} 秒最多自动回 ${count} 条`);
+                }
                 reloadSettings();
             };
         });

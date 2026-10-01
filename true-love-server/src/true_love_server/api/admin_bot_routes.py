@@ -177,7 +177,8 @@ async def listen_reset_all(bot_id: str, request: dict = Body(default={})):
 async def listen_settings(bot_id: str):
     """
     微信设置：private_poll 私聊轮询，auto_accept_friends 自动通过好友申请，group_reply 群回复方式，
-    auto_ai_<类型> 群里这种消息不 @ 也交给 AI，auto_ai_<类型>_limit 它的疲劳限制（类型见 bot_settings.AUTO_AI_TYPES）
+    auto_ai_<类型> 群里这种消息不 @ 也交给 AI，auto_ai_<类型>_limit 它的疲劳限制（类型见 bot_settings.AUTO_AI_TYPES），
+    ai_rate_limit 同一个人找 AI 的限频
     """
     return ApiResponse(data=bot_settings.admin_settings(deps.wechat_bot(bot_id).bot_id))
 
@@ -186,11 +187,11 @@ async def listen_settings(bot_id: str):
 async def listen_save_settings(bot_id: str, request: dict):
     """
     改微信设置：先存下来，再通知 base 立即生效；base 离线时等它下次连上微信再取。
-    自动交给 AI 的开关和疲劳限制只有 server 用，存下来就生效，不发给 base
+    自动交给 AI 的开关和各种限频只有 server 用，存下来就生效，不发给 base
 
     Body:
         - 要改的设置，如 {"private_poll": true}、{"group_reply": ["at", "quote"]}、{"auto_ai_link": true}
-          或 {"auto_ai_link_limit": {"count": 5, "seconds": 600}}
+          或 {"auto_ai_link_limit": {"count": 5, "seconds": 600}}、{"ai_rate_limit": {"count": 6, "seconds": 180}}
 
     Returns:
         - settings: 存下来的全部设置
@@ -201,11 +202,11 @@ async def listen_save_settings(bot_id: str, request: dict):
     for key, value in request.items():
         if key == bot_settings.GROUP_REPLY:
             bot_settings.set_list(bot.bot_id, key, value)
-        elif key in bot_settings.AUTO_AI_LIMITS:
+        elif key in bot_settings.LIMITS:
             bot_settings.set_limit(bot.bot_id, key, value)
         else:
             bot_settings.set_bool(bot.bot_id, key, value)
-    server_only = bot_settings.AUTO_AI_SWITCHES + bot_settings.AUTO_AI_LIMITS
+    server_only = (*bot_settings.AUTO_AI_SWITCHES, *bot_settings.LIMITS)
     for_base = {key: value for key, value in request.items() if key not in server_only}
     applied = True
     if for_base:
@@ -224,7 +225,7 @@ def _check_settings(request: dict) -> None:
         elif key == bot_settings.GROUP_REPLY:
             if not (isinstance(value, list) and value and all(style in bot_settings.REPLY_STYLES for style in value)):
                 raise ValidationException(f"群回复方式至少勾一个，只能是 {', '.join(bot_settings.REPLY_STYLES)}")
-        elif key in bot_settings.AUTO_AI_LIMITS:
+        elif key in bot_settings.LIMITS:
             if not (isinstance(value, dict) and set(value) == {"count", "seconds"}
                     and all(type(n) is int and n > 0 for n in value.values())):
                 raise ValidationException(f"{key} 的条数和秒数都要是正整数")

@@ -144,6 +144,17 @@ class OnMessageTests(ServerCase):
         self.assertEqual(sent, [("群A", "image"), ("群A", "image"), ("群B", "image"), ("群A", "link")])
         self.assertEqual(len(self.messages("wxid_m8s")), 4)
 
+    def test_personal_rate_limit_follows_the_bot_setting(self):
+        self.register("wxid_m8s")
+        bot_settings.set_limit("wxid_m8s", bot_settings.AI_RATE_LIMIT, {"count": 2, "seconds": 600})
+
+        for i in range(4):
+            self.post("/base/on-message", bot=self.bot("wxid_m8s"), msg=message(msg_id=f"m{i}", is_at_me=True))
+
+        self.assertEqual(len(self.ai_calls), 2)
+        [(_, payload)] = self.bases.sent()
+        self.assertIn("太快", payload["content"])
+
     def test_media_is_handed_to_ai_as_a_url_on_the_base_that_received_it(self):
         self.post("/base/on-message", bot=self.bot("wxid_ser", callback="http://100.64.0.9:5000"),
                   msg=message(is_group=False, msg_type="image",

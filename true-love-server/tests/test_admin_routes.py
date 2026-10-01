@@ -190,6 +190,17 @@ class ListenPageTests(ServerCase):
         self.assertEqual(data["settings"]["auto_ai_link_limit"], {"count": 5, "seconds": 600})
         self.assertEqual(self.bases.sent(), [])
 
+    def test_personal_ai_rate_limit_is_a_setting_too(self):
+        self.register("wxid_ser")
+        self.assertEqual(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["ai_rate_limit"],
+                         {"count": 6, "seconds": 180})
+
+        data = self.post("/admin/bots/wxid_ser/listen/settings", token=None,
+                         ai_rate_limit={"count": 3, "seconds": 60})["data"]
+
+        self.assertEqual(data["settings"]["ai_rate_limit"], {"count": 3, "seconds": 60})
+        self.assertEqual(self.bases.sent(), [])
+
     def test_only_wechat_settings_are_pushed_to_the_base(self):
         callback = self.register("wxid_ser")
 

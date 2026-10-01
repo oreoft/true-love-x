@@ -35,7 +35,9 @@ async def handle_incoming(bot: BotRecord, msg: ChatMsg) -> None:
         return
 
     if msg.is_at_me or not msg.is_group or await asyncio.to_thread(_auto_ai, bot.bot_id, msg):
-        decision = ai_rate_limit.check(bot.bot_id, msg.chat_id, msg.sender_id)
+        limit = await asyncio.to_thread(bot_settings.get_limit, bot.bot_id, bot_settings.AI_RATE_LIMIT)
+        decision = ai_rate_limit.check(bot.bot_id, msg.chat_id, msg.sender_id,
+                                       limit=limit["count"], seconds=limit["seconds"])
         if decision != ai_rate_limit.ALLOW:
             LOG.warning("找 AI 太频繁，只入库: bot_id=%s chat=%s sender_id=%s", bot.bot_id, msg.chat_id, msg.sender_id)
             if decision == ai_rate_limit.NOTIFY:
