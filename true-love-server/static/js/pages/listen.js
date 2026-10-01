@@ -42,16 +42,27 @@ export async function show(root, ctx) {
     } catch (e) {
         settingsError = e.message;
     }
-    const reload = async () => {
+    const dimmed = async (work) => {
         root.style.opacity = '0.5';
         root.style.pointerEvents = 'none';
         try {
-            await show(root, ctx);
+            await work();
         } finally {
             root.style.opacity = '';
             root.style.pointerEvents = '';
         }
     };
+    // 监听状态要 base 逐个检查窗口，监听多时要等好几秒，所以改设置后只重新拉设置
+    const reload = () => dimmed(() => show(root, ctx));
+    const reloadSettings = () => dimmed(async () => {
+        try {
+            settings = await api.listenSettings();
+            settingsError = '';
+        } catch (e) {
+            settingsError = e.message;
+        }
+        draw();
+    });
 
     const listenTab = () => `
         ${statusError ? `<div class="banner">没取到监听状态：${esc(statusError)}</div>` : `
@@ -142,7 +153,7 @@ export async function show(root, ctx) {
                     const state = result.settings[key] ? '打开' : '关闭';
                     toast(result.applied ? `${label}已${state}` : `${label}已${state}，base 下次连上微信时生效`);
                 }
-                reload();
+                reloadSettings();
             };
         });
         $('#saveReply', root).onclick = async (e) => {
@@ -150,7 +161,7 @@ export async function show(root, ctx) {
             if (!styles.length) { toast('至少勾一种回复方式', 'error'); return; }
             const result = await busy(e.target, '保存中…', () => attempt(() => api.listenSaveSettings({ group_reply: styles })));
             if (result) toast(result.applied ? '群回复方式已保存' : '群回复方式已保存，base 下次连上微信时生效');
-            reload();
+            reloadSettings();
         };
         $('#muteGroups', root).onclick = (e) => confirmModal('把所有群设成免打扰？',
             'base 会在微信里逐个打开群的右键菜单，群多时要等一两分钟。开了子窗口的群照常收消息。', async () => {
