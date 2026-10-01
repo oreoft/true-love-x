@@ -21,6 +21,8 @@ class GroupMessageRepository:
         self.session = session
 
     def save(self, msg) -> bool:
+        """返回是否为新消息；重复消息返回 False，其他失败回滚后原样抛出"""
+        msg_hash = ""
         try:
             msg_id_val = getattr(msg, "msg_id", "")
             msg_hash = msg_id_val or getattr(msg, "msg_hash", "") or self._fallback_hash(msg)
@@ -50,10 +52,9 @@ class GroupMessageRepository:
             self.session.rollback()
             LOG.warning("duplicate msg ignored: msg_hash=%s", msg_hash)
             return False
-        except Exception as e:
+        except Exception:
             self.session.rollback()
-            LOG.error("save failed: %s", e)
-            return True
+            raise
 
     @staticmethod
     def _serialize(field) -> Optional[str]:
@@ -79,39 +80,34 @@ class GroupMessageRepository:
     def get_messages(self, chat_id: str, sender_id: str = None, sender_name: str = None,
                      limit: int = 100, tail_id: int = None, keyword: str = None) -> list[dict]:
         """chat_id 里 id 小于 tail_id 的最近 limit 条，按时间正序返回；tail_id 为空时从最新的开始"""
-        try:
-            query = self.session.query(GroupMessage).filter(GroupMessage.chat_id == chat_id)
-            if keyword:
-                query = query.filter(GroupMessage.content.contains(keyword))
-            if sender_id:
-                query = query.filter(GroupMessage.sender_id == sender_id)
-            if sender_name:
-                query = query.filter(GroupMessage.sender_name == sender_name)
-            if tail_id is not None:
-                query = query.filter(GroupMessage.id < tail_id)
-            messages = query.order_by(GroupMessage.id.desc()).limit(limit).all()
-            messages.reverse()
-            return [
-                {
-                    "id": msg.id,
-                    "msg_id": msg.msg_id,
-                    "msg_type": msg.msg_type,
-                    "chat_id": msg.chat_id,
-                    "chat_name": msg.chat_name,
-                    "sender_id": msg.sender_id,
-                    "sender_name": msg.sender_name,
-                    "content": msg.content,
-                    "is_at_me": msg.is_at_me,
-                    "created_at": msg.created_at.strftime('%Y-%m-%d %H:%M:%S') if msg.created_at else None,
-                    # 带时区的时间，tl-admin 按浏览器本地时间显示；库里存的是 server 所在时区的本地时间
-                    "created_at_iso": msg.created_at.astimezone().isoformat(timespec="seconds") if msg.created_at else None,
-                }
-                for msg in messages
-            ]
-        except Exception as e:
-            LOG.error("get_messages failed: chat_id=%s err=%s", chat_id, e)
-
-            return []
+        query = self.session.query(GroupMessage).filter(GroupMessage.chat_id == chat_id)
+        if keyword:
+            query = query.filter(GroupMessage.content.contains(keyword))
+        if sender_id:
+            query = query.filter(GroupMessage.sender_id == sender_id)
+        if sender_name:
+            query = query.filter(GroupMessage.sender_name == sender_name)
+        if tail_id is not None:
+            query = query.filter(GroupMessage.id < tail_id)
+        messages = query.order_by(GroupMessage.id.desc()).limit(limit).all()
+        messages.reverse()
+        return [
+            {
+                "id": msg.id,
+                "msg_id": msg.msg_id,
+                "msg_type": msg.msg_type,
+                "chat_id": msg.chat_id,
+                "chat_name": msg.chat_name,
+                "sender_id": msg.sender_id,
+                "sender_name": msg.sender_name,
+                "content": msg.content,
+                "is_at_me": msg.is_at_me,
+                "created_at": msg.created_at.strftime('%Y-%m-%d %H:%M:%S') if msg.created_at else None,
+                # 带时区的时间，tl-admin 按浏览器本地时间显示；库里存的是 server 所在时区的本地时间
+                "created_at_iso": msg.created_at.astimezone().isoformat(timespec="seconds") if msg.created_at else None,
+            }
+            for msg in messages
+        ]
 
     def list_chats(self) -> list[dict]:
         """库里出现过的会话，最近有消息的在前，后台按群浏览用"""

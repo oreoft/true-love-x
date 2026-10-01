@@ -24,20 +24,28 @@ def _run_async(coro):
     """在当前线程创建独立事件循环执行协程，用于 event loop 启动前/信号处理中。"""
     loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(coro)
-    except Exception:
-        pass
+        return loop.run_until_complete(coro)
     finally:
         loop.close()
 
 
+def _notify(content: str) -> None:
+    """给默认机器人的管理员发通知，发不出去只记 warning，不影响启动和退出"""
+    try:
+        ok, err = _run_async(base_client.send_to_master("", content))
+    except Exception as e:
+        ok, err = False, str(e)
+    if not ok:
+        LOG.warning("给管理员的通知没发出去: content=%s err=%s", content, err)
+
+
 def notice_master():
     """启动通知和信号处理：从默认机器人发给它的管理员，管理员是谁由 base 决定"""
-    _run_async(base_client.send_to_master("", "tl-server 启动成功"))
+    _notify("tl-server 启动成功")
 
     def handler(sig, frame):
         """退出前清理环境"""
-        _run_async(base_client.send_to_master("", "tl-server 正在关闭..."))
+        _notify("tl-server 正在关闭...")
         exit(0)
 
     signal.signal(signal.SIGINT, handler)

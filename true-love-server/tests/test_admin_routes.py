@@ -149,14 +149,19 @@ class ListenPageTests(ServerCase):
                          [("群A", None), ("群B", "window_not_found")])
         self.assertEqual(self.bases.sent(), [(f"{callback}/listen/status", {"chat_names": ["群A", "群B"]})])
 
-    def test_listens_are_unhealthy_when_base_cannot_tell(self):
+    def test_failed_status_query_is_an_error_and_nothing_is_reset(self):
         callback = self.register("wxid_ser")
         listen_store.add("wxid_ser", "群A")
         self.bases.reply(f"{callback}/listen/status", {"code": 102, "message": "WeChat offline"})
 
-        data = self.get("/admin/bots/wxid_ser/listen/status")["data"]
+        with self.assertLogs("ListenManager", level="ERROR"):
+            status = self.get("/admin/bots/wxid_ser/listen/status")
+            refresh = self.post("/admin/bots/wxid_ser/listen/refresh", token=None)
 
-        self.assertEqual(data["listeners"], [{"chat": "群A", "status": "unhealthy", "reason": "status_failed"}])
+        for response in (status, refresh):
+            self.assertNotEqual(response["code"], 0)
+            self.assertIn("WeChat offline", response["message"])
+        self.assertEqual([url for url, _ in self.bases.sent()], [f"{callback}/listen/status"] * 2)
 
     def test_probe_returns_what_base_read(self):
         callback = self.register("wxid_ser")
@@ -233,7 +238,7 @@ class ListenPageTests(ServerCase):
         callback = self.register("wxid_ser")
         self.bases.reply(f"{callback}/settings", error=ConnectionError("base is down"))
 
-        with self.assertLogs("WeChatClient", level="ERROR"):
+        with self.assertLogs("WeChatClient", level="WARNING"), self.assertLogs("AdminBotRoutes", level="WARNING"):
             data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, private_poll=True)["data"]
 
         self.assertEqual(data["applied"], False)

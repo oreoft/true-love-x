@@ -6,8 +6,10 @@ Server DB 当前 Migration
 有新 migration 时：直接替换此文件内容即可，旧版本已在 schema_migrations 里记录，不会重复执行。
 """
 
+import logging
 import sqlite3
 
+LOG = logging.getLogger("Migrate")
 
 # 每个机器人一个库以后，库里的聊天记录都来自同一个机器人，平台由机器人登记表决定，不再每行存一遍
 VERSION = "004"
@@ -24,16 +26,13 @@ def migrate(conn: sqlite3.Connection) -> None:
 
 def run(db_path: str) -> None:
     """幂等执行当前 migration，已应用则跳过"""
-    import logging
-    log = logging.getLogger("migrate")
-
     conn = sqlite3.connect(db_path)
     try:
         applied = {row[0] for row in conn.execute("SELECT version FROM schema_migrations")}
         if VERSION in applied:
-            log.info("Migration %s: already applied, skipping", VERSION)
+            LOG.info("Migration %s: already applied, skipping", VERSION)
             return
-        log.info("Migration %s: applying — %s", VERSION, DESCRIPTION)
+        LOG.info("Migration %s: applying — %s", VERSION, DESCRIPTION)
         try:
             migrate(conn)
             from datetime import datetime
@@ -42,10 +41,10 @@ def run(db_path: str) -> None:
                 (VERSION, DESCRIPTION, datetime.now().isoformat()),
             )
             conn.commit()
-            log.info("Migration %s: done", VERSION)
-        except Exception as e:
+            LOG.info("Migration %s: done", VERSION)
+        except Exception:
             conn.rollback()
-            log.error("Migration %s: failed — %s", VERSION, e)
+            LOG.exception("Migration %s: failed", VERSION)
             raise
     finally:
         conn.close()

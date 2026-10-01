@@ -68,7 +68,7 @@ class LokiClient:
         self._session.mount("https://", adapter)
 
         self._initialized = True
-        LOG.info(f"LokiClient 初始化完成, loki_url: {self.loki_url}, user_id: {self.user_id}")
+        LOG.info("LokiClient 初始化完成, loki_url: %s, user_id: %s", self.loki_url, self.user_id)
 
     def _get_auth(self) -> HTTPBasicAuth:
         """获取 Basic Auth 认证"""
@@ -122,7 +122,8 @@ class LokiClient:
                 # JsonFormatter 写入的是 ISO 格式 UTC 时间，转为纳秒时间戳
                 dt_log = datetime.fromisoformat(log_data['timestamp'])
                 actual_ts_ns = int(dt_log.timestamp() * 1_000_000_000)
-        except Exception:
+        except (ValueError, TypeError, AttributeError):
+            # 不是 JSON 或字段格式不对的日志行，按原文显示
             pass
 
         if level == 'WARNING':
@@ -197,7 +198,7 @@ class LokiClient:
             data = resp.json()
 
             if data.get('status') != 'success':
-                LOG.error(f"Loki 查询失败: {data}")
+                LOG.error("Loki 查询失败: %s", data)
                 return {
                     "success": False,
                     "logs": [],
@@ -232,13 +233,14 @@ class LokiClient:
                 "message": "查询超时，请稍后重试"
             }
         except requests.exceptions.HTTPError as e:
-            LOG.error(f"Loki HTTP 错误: {e}")
+            LOG.error("Loki HTTP 错误: %s", e)
             error_msg = str(e)
             if e.response is not None:
                 try:
                     error_data = e.response.json()
                     error_msg = error_data.get('message', str(e))
-                except:
+                except (ValueError, AttributeError):
+                    # 返回体不是 JSON 对象时用 HTTPError 自己的描述
                     pass
             return {
                 "success": False,
@@ -246,7 +248,7 @@ class LokiClient:
                 "message": f"HTTP 错误: {error_msg}"
             }
         except Exception as e:
-            LOG.exception(f"Loki 查询异常: {e}")
+            LOG.exception("Loki 查询异常")
             return {
                 "success": False,
                 "logs": [],

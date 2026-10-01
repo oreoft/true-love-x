@@ -26,6 +26,21 @@ _MUTE_ALL_TIMEOUT = (2, 300)
 # 测活要读一遍聊天窗口里的消息，m8s 实测 9~14 秒
 _PROBE_TIMEOUT = (2, 30)
 
+_SDK_OK = "成功"
+
+
+def sdk_failure(data) -> str | None:
+    """
+    /execute/* 只要方法没抛异常就回 code=0，SDK 的执行结果原样放在 data 里。
+    SDK 返回 WxResponse（dict 子类）时序列化成 {"status": "成功"/"失败"/"错误", "message", "data"}，
+    status 不是"成功"就是失败，返回失败原因；其他返回值不算失败，返回 None。
+    """
+    if not isinstance(data, dict) or not {"status", "message"} <= data.keys():
+        return None
+    if data["status"] == _SDK_OK:
+        return None
+    return f"{data['status']}: {data.get('message') or 'no message'}"
+
 
 class WeChatClient(BaseClient):
 
@@ -38,12 +53,21 @@ class WeChatClient(BaseClient):
         try:
             res = await self._post(path, payload, **({"timeout": timeout} if timeout else {}))
             res.raise_for_status()
-            result = res.data or {}
-            return {"success": result.get("code") == 0, "data": result.get("data"),
-                    "message": result.get("message", "")}
         except Exception as e:
-            LOG.error("WeChat %s on bot [%s] failed: %s", label, self.bot.bot_id, e)
+            LOG.warning("WeChat %s on bot [%s] failed: %s", label, self.bot.bot_id, e)
             return {"success": False, "data": None, "message": str(e)}
+        result = res.data if isinstance(res.data, dict) else {}
+        data = result.get("data")
+        if result.get("code") != 0:
+            message = result.get("message") or str(result)
+            LOG.warning("WeChat %s on bot [%s] failed: code=%s message=%s",
+                        label, self.bot.bot_id, result.get("code"), message)
+            return {"success": False, "data": data, "message": message}
+        sdk_error = sdk_failure(data)
+        if sdk_error is not None:
+            LOG.warning("WeChat %s on bot [%s] failed in SDK: %s", label, self.bot.bot_id, sdk_error)
+            return {"success": False, "data": data, "message": sdk_error}
+        return {"success": True, "data": data, "message": result.get("message", "")}
 
     async def add_listen_chat(self, nickname: str) -> dict:
         result = await self._call("add_listen_chat", "/listen/add", {"nickname": nickname}, timeout=_LISTEN_ADD_TIMEOUT)

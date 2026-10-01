@@ -70,30 +70,40 @@ def _send_img(bot_id: str, path: str, receiver: str) -> tuple[bool, str]:
 
 
 def send_daily_notice(bot_id, room_id, content=CN_MORNING):
+    """推文字和两张图，各自独立；文字或已有的图没发出去就在最后抛异常，调度器记失败并通知管理员"""
     try:
         ensure_today_images()
-    except Exception as e:
+    except Exception:
         # 图片下载失败也照常推文字
-        LOG.error("下载当天图片失败: %s", e)
+        LOG.exception("下载当天图片失败")
     # 图片按北京时间的日期命名，和下载时一致
     current_date = get_current_date()
-    moyu_file_path = f'moyu-jpg/{current_date}.jpg'
-    zao_bao_file_path = f'zaobao-jpg/{current_date}.jpg'
 
     for title, path, params in MARKET_SECTIONS:
         text = fetch_data(path, params)
         if text:
             content += f"\n\n{title}\n{text}"
 
-    asyncio.run(base_client.send_text(bot_id, room_id, '', content))
-    if check_image_openable(moyu_file_path):
+    failures = []
+    ok, err = asyncio.run(base_client.send_text(bot_id, room_id, '', content))
+    if not ok:
+        LOG.error("早报文字发送失败: bot_id=%s receiver=%s err=%s", bot_id, room_id, err)
+        failures.append(f"文字: {err}")
+    for folder in ("moyu-jpg", "zaobao-jpg"):
+        image_path = f'{folder}/{current_date}.jpg'
+        if not check_image_openable(image_path):
+            # 没下载到不算推送失败，下载失败时已经记过
+            LOG.warning("今天的图片没准备好，不发: %s", image_path)
+            continue
         time.sleep(2)
-        moyu_res = _send_img(bot_id, moyu_file_path, room_id)
-        LOG.info(f"send_image: {moyu_file_path}, result: {moyu_res}")
-    if check_image_openable(zao_bao_file_path):
-        time.sleep(2)
-        zao_bao_res = _send_img(bot_id, zao_bao_file_path, room_id)
-        LOG.info(f"send_image: {zao_bao_file_path}, result: {zao_bao_res}")
+        ok, err = _send_img(bot_id, image_path, room_id)
+        if ok:
+            LOG.info("早报图片已发送: bot_id=%s receiver=%s path=%s", bot_id, room_id, image_path)
+        else:
+            LOG.error("早报图片发送失败: bot_id=%s receiver=%s path=%s err=%s", bot_id, room_id, image_path, err)
+            failures.append(f"{image_path}: {err}")
+    if failures:
+        raise RuntimeError(f"早报推送到 {room_id} 有 {len(failures)} 项失败: {'; '.join(failures)}")
 
 
 def notice_moyu_schedule(bot_id, room_id):
@@ -108,13 +118,16 @@ _download_lock = threading.Lock()
 
 
 def ensure_today_images():
-    """当天的摸鱼图、早报图还没有就先下载；加锁，同时触发的推送只下载一次"""
+    """当天的摸鱼图、早报图还没有就先下载，两张各下各的，互不拖累；加锁，同时触发的推送只下载一次"""
     with _download_lock:
         current_date = get_current_date()
-        if not check_image_openable(f'moyu-jpg/{current_date}.jpg'):
-            download_moyu_file()
-        if not check_image_openable(f'zaobao-jpg/{current_date}.jpg'):
-            download_zao_bao_file()
+        for folder, download in (("moyu-jpg", download_moyu_file), ("zaobao-jpg", download_zao_bao_file)):
+            if check_image_openable(f'{folder}/{current_date}.jpg'):
+                continue
+            try:
+                download()
+            except Exception:
+                LOG.exception("下载 %s 失败", folder)
 
 
 @log_function_execution
@@ -133,17 +146,17 @@ def download_moyu_file():
                 break
             LOG.warning("download_moyu_file 未能获取到数据，重试中... Retry count:%d", i + 1)
             time.sleep(30)
-        except Exception as e:
-            LOG.error(f"download_moyu_file Failed to fetch data. Retry count:{i}, Error:{e}")
+        except Exception:
+            LOG.warning("download_moyu_file 取链接失败，第 %d 次", i + 1, exc_info=True)
             time.sleep(5)
     if file_url:
         response = get(file_url, timeout=DEFAULT_TIMEOUT, follow_redirects=True)
         response.raise_for_status()
         with open(full_file_path, 'wb') as f:
             f.write(response.content)
-        LOG.info(f'{local_filename}已下载到 {download_directory}')
+        LOG.info("%s 已下载到 %s", local_filename, download_directory)
     else:
-        LOG.error(f"未能获取到摸鱼文件的链接 {download_directory}")
+        LOG.error("未能获取到摸鱼文件的链接: %s", local_filename)
 
 
 @log_function_execution
@@ -169,7 +182,8 @@ def download_zao_bao_file():
             response.raise_for_status()
             break
         except Exception as e:
-            LOG.error(f"download_zao_bao_file 尝试 {i + 1}/{retry_count} 失败: {e}")
+            LOG.warning("download_zao_bao_file 尝试 %d/%d 失败: %s", i + 1, retry_count, e)
+            response = None
             time.sleep(2)
     if response is None or not response.ok or not response.content:
         LOG.error("所有下载尝试均失败，未能获取到早报图片")
@@ -177,27 +191,30 @@ def download_zao_bao_file():
 
     with open(full_file_path, 'wb') as file:
         file.write(response.content)
-    LOG.info(f'{local_filename} 已下载到 {download_directory}')
+    LOG.info("%s 已下载到 %s", local_filename, download_directory)
 
 
 def get_moyu_url_by_wx():
     url = "https://mp.weixin.qq.com/mp/appmsgalbum?action=getalbum&album_id=3743225907507462153"
     response = get(url, timeout=DEFAULT_TIMEOUT, follow_redirects=True)
 
-    if response.status_code == 200:
-        soup = BeautifulSoup(response.text, 'html.parser')
-        album_items = soup.find_all('li', class_='album__list-item')
+    if response.status_code != 200:
+        LOG.error("摸鱼日历专辑获取失败: status=%s", response.status_code)
+        return None
 
-        for item in album_items:
-            title = item.find('div', class_='album__item-title').text.strip()
-            if f"[摸鱼人日历]{get_current_date()}" in title or f"[摸鱼人日历]{get_current_date().lstrip('0')}" in title:
-                link = item['data-link']
-                LOG.info(f"article link: {link}")
-                result = send_to_jina(link)
-                LOG.info(f"result link: {result}")
-                return result
-    else:
-        LOG.error(f"download_moyu_file_by_wx Failed to fetch data. Status code:{response.status_code}")
+    soup = BeautifulSoup(response.text, 'html.parser')
+    current_date = get_current_date()
+    for item in soup.find_all('li', class_='album__list-item'):
+        title_div = item.find('div', class_='album__item-title')
+        title = title_div.text.strip() if title_div else ""
+        if f"[摸鱼人日历]{current_date}" in title or f"[摸鱼人日历]{current_date.lstrip('0')}" in title:
+            link = item['data-link']
+            LOG.info("article link: %s", link)
+            result = send_to_jina(link)
+            LOG.info("image link: %s", result)
+            return result
+    LOG.warning("摸鱼日历专辑里没有今天的标题: %s", current_date)
+    return None
 
 
 def send_to_jina(link):
@@ -220,13 +237,13 @@ def send_to_jina(link):
                 image_url = element['data-src']
                 if not image_url.startswith('http'):
                     image_url = 'https:' + image_url
-                LOG.info(f"Found image URL after target text: {image_url}")
+                LOG.info("Found image URL after target text: %s", image_url)
                 return image_url
 
         LOG.error("No suitable image found after target text in the article")
         return None
     else:
-        LOG.error(f"Failed to fetch data from WeChat article. Status code:{response.status_code}")
+        LOG.error("Failed to fetch data from WeChat article. Status code: %s", response.status_code)
         return None
 
 
@@ -238,12 +255,11 @@ def get_current_date(tzs: str = "Asia/Shanghai"):
 
 
 def check_image_openable(image_path):
+    """图片存在且能打开；只是检查，没有图是正常情况（还没下载），由调用方决定要不要记"""
     try:
         with Image.open(image_path) as img:
             img.verify()
-            LOG.info("Image is openable and appears to be valid.")
             return True
-    except (IOError, SyntaxError) as e:
-        LOG.error(f"Cannot open image: {e}")
+    except (IOError, SyntaxError):
         return False
 

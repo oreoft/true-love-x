@@ -61,13 +61,33 @@ class PushTests(ServerCase):
 
         self.assertEqual(self.downloaded, ["moyu-jpg", "zaobao-jpg"])
 
-    def test_failed_download_still_sends_the_text(self):
+    def test_failed_download_still_sends_the_text_and_the_other_picture(self):
+        # 图没下载到不算推送失败，不抛异常
         with patch.object(job_process, "download_moyu_file", Mock(side_effect=RuntimeError("offline"))), \
-                self.assertLogs("JobProcess", level="ERROR"):
+                self.assertLogs("JobProcess", level="WARNING") as logs:
+            job_process.notice_moyu_schedule("wxid_ser", "委员会")
+
+        self.assertTrue(any("WARNING" in line and "moyu-jpg" in line for line in logs.output))
+
+        self.assertEqual(len(self.texts()), 1)
+        self.assertEqual([payload["url"].split("/media/")[1].split("/")[0] for payload in self.files()], ["zaobao-jpg"])
+
+    def test_push_that_base_rejects_is_a_failure(self):
+        self.bases.reply(f"{self.base}/send/text", {"code": 102, "message": "WeChat offline"})
+
+        with self.assertLogs("JobProcess", level="ERROR"), self.assertRaisesRegex(RuntimeError, "WeChat offline"):
+            job_process.notice_moyu_schedule("wxid_ser", "委员会")
+
+        # 文字没发出去，图片照发
+        self.assertEqual(len(self.files()), 2)
+
+    def test_picture_that_base_fails_to_send_is_a_failure(self):
+        self.bases.reply(f"{self.base}/send/file", {"code": 102, "message": "upload failed"})
+
+        with self.assertLogs("JobProcess", level="ERROR"), self.assertRaisesRegex(RuntimeError, "upload failed"):
             job_process.notice_moyu_schedule("wxid_ser", "委员会")
 
         self.assertEqual(len(self.texts()), 1)
-        self.assertEqual(self.files(), [])
 
 
 if __name__ == "__main__":
