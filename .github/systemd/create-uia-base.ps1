@@ -13,10 +13,10 @@ if (Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue)
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
 }
 
-# 创建任务
+# Create the task: it still runs on the logged-in desktop (UIA needs it), only the console window is hidden; logs go to Loki
 $Action = New-ScheduledTaskAction `
     -Execute "powershell.exe" `
-    -Argument "-NoProfile -ExecutionPolicy Bypass -NoExit -File `"$RunnerScript`""
+    -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RunnerScript`""
 
 $Principal = New-ScheduledTaskPrincipal `
     -UserId $env:USERNAME `

@@ -105,9 +105,11 @@ jobs:
               Write-Host "Task was not running or could not be stopped; continuing"
             }
 
-            # Re-register when the task is missing (fresh machine) or does not run the runner in this repo
+            # Re-register when the task is missing (fresh machine), does not run the runner in this repo,
+            # or still opens a console window (registered before the window was hidden)
             $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-            if (-not $task -or "$($task.Actions.Arguments)" -notlike '*\.github\systemd\run-true-love-base.ps1*') {
+            $taskArgs = "$($task.Actions.Arguments)"
+            if (-not $task -or $taskArgs -notlike '*\.github\systemd\run-true-love-base.ps1*' -or $taskArgs -notlike '*-WindowStyle Hidden*') {
               Write-Host "Registering $taskName from the repo scripts"
               powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot '.github\systemd\create-uia-base.ps1')
               if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
