@@ -49,6 +49,16 @@ def _is_file_placeholder(content: str) -> bool:
     return text in ("", "文件", "[文件]") or text.startswith("文件\n")
 
 
+def is_auto_triggered(msg: ChatMsg) -> bool:
+    """
+    这条消息是不是群里没人 @、由 server 按后台开关自动交给 AI 的（链接、PDF、图片、笔记）
+
+    群消息只有 @ 了机器人或者自动触发两种情况会到这里，所以群里没 @ 就是自动触发。
+    自动触发时怎么表现不同（比如不发技能的"正在…"提示），都以这里为准，别在别处再判断一遍。
+    """
+    return msg.is_group and not msg.is_at_me
+
+
 def _clean_content(content: str, mention: str = "") -> str:
     """去掉正文里叫机器人的那段文字；是哪段文字由 base 识别后随消息带来"""
     if mention:
@@ -79,6 +89,8 @@ class AgentLoop:
         receiver = chat_id if is_group else sender_id
         # 群里的回复带上原消息，base 按设置 @、拍一拍或引用对方
         reply_msg_id = msg.msg_id if is_group else ""
+        # 没人叫它、自动接话时不发技能的"正在…"提示，免得群里一张图刷两条
+        notify = not is_auto_triggered(msg)
 
         LOG.info("AgentLoop.run: bot_id=%s platform=%s sender_id=%s sender_name=%s session=%s type=%s",
                  bot_id, platform, sender_id, sender_name, session_id, msg_type)
@@ -151,7 +163,7 @@ class AgentLoop:
             # 2. 并行执行所有 tool，把结果追加到 messages
             tool_results = await asyncio.gather(*[
                 self._execute_tool(tc, session_id, sender_id, sender_name, is_group, receiver, at_user, platform,
-                                   bot_id)
+                                   bot_id, notify=notify)
                 for tc in tool_calls
             ])
             for tc, tool_result in zip(tool_calls, tool_results):
@@ -250,8 +262,9 @@ class AgentLoop:
             at_user: str,
             platform: str,
             bot_id: str,
+            notify: bool = True,
     ) -> str:
-        """执行单个 tool，返回结果字符串"""
+        """执行单个 tool，返回结果字符串；notify 为 False 时不发技能的预通知"""
         name = tool_call["name"]
         args = tool_call["arguments"]
         LOG.info("执行 tool: %s, args=%s", name, str(args)[:200])
@@ -270,7 +283,7 @@ class AgentLoop:
         }
 
         try:
-            notify_msg = skill_registry.get_notify(name)
+            notify_msg = skill_registry.get_notify(name) if notify else None
             if notify_msg:
                 import random
                 from true_love_ai.agent.server_client import send_text
