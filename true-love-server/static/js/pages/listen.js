@@ -64,7 +64,7 @@ export async function show(root, ctx) {
             <span>群回复方式</span>
             ${REPLY_STYLES.map(([value, label]) => `<label><input type="checkbox" data-reply="${value}"
                 ${(switches.group_reply || ['at']).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}
-            <span class="muted grow">勾几个就随机用其中一种；拍一拍、引用做不到时改用 @。私聊总是直接回复</span>
+            <span class="muted grow">勾几个就等概率随机用其中一种；拍一拍后直接发回复，引用不了时改用 @。私聊总是直接回复</span>
             <button class="btn sm" id="saveReply">保存</button>
         </div>
         ${statusError ? `<div class="banner">没取到监听状态：${esc(statusError)}</div>` : `
@@ -84,7 +84,7 @@ export async function show(root, ctx) {
             <span>群回复方式</span>
             ${REPLY_STYLES.map(([value, label]) => `<label><input type="checkbox" data-reply="${value}"
                 ${(switches.group_reply || ['at']).includes(value) ? 'checked' : ''}> ${label}</label>`).join('')}
-            <span class="muted grow">勾几个就随机用其中一种；拍一拍、引用做不到时改用 @。私聊总是直接回复</span>
+            <span class="muted grow">勾几个就等概率随机用其中一种；拍一拍后直接发回复，引用不了时改用 @。私聊总是直接回复</span>
             <button class="btn sm" id="saveReply">保存</button>
         </div>
             <button class="add" id="add" ${disabled}>＋ 添加监听</button>

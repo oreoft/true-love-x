@@ -238,16 +238,17 @@ class WxAutoClient():
 
         Args:
             reply_msg_id: 这条是在回复哪条群消息
-            reply_style: 怎么回复这条群消息：at 直接 @，tickle 先拍一拍再发（不再 @），quote 引用原消息；
-                原消息已经不在监听窗口里、拍不了或引用不了时照常 @ 发送
+            reply_style: 怎么回复这条群消息：at 直接 @；tickle 先拍一拍再发，不管拍没拍成都不再 @；
+                quote 引用原消息，原消息已经不在监听窗口里或引用不了时照常 @ 发送
         """
         if reply_msg_id and reply_style != "at":
             raw_msg = self._replied_message(receiver, reply_msg_id, reply_style)
-            if raw_msg is not None:
-                if reply_style == "quote" and self._quote(receiver, raw_msg, content):
-                    return True
-                if reply_style == "tickle" and self._tickle(receiver, raw_msg):
-                    at_list = None
+            if reply_style == "quote" and raw_msg is not None and self._quote(receiver, raw_msg, content):
+                return True
+            if reply_style == "tickle":
+                if raw_msg is not None:
+                    self._tickle(receiver, raw_msg)
+                at_list = None
         try:
             LOG.debug(f"SendMsg content: {content[:50]}...")
             sub_window = self.wx.GetSubWindow(receiver)
@@ -262,11 +263,11 @@ class WxAutoClient():
             return False
 
     def _replied_message(self, receiver: str, msg_id: str, style: str):
-        """被回复的那条消息还在监听窗口里时返回它，否则返回 None（回复降级成 @）"""
+        """被回复的那条消息还在监听窗口里时返回它，否则返回 None"""
         with self._replyable_lock:
             entry = self._replyable.get(msg_id)
         if entry is None or entry[1] != receiver or time.monotonic() - entry[0] > REPLY_KEEP_SECONDS:
-            LOG.info("[Reply] [%s] message %s is no longer kept; %s falls back to @", receiver, msg_id, style)
+            LOG.info("[Reply] [%s] message %s is no longer kept; replying without %s", receiver, msg_id, style)
             return None
         raw_msg = entry[2]
         try:
@@ -274,7 +275,7 @@ class WxAutoClient():
                 return raw_msg
         except Exception:
             LOG.warning("[Reply] [%s] checking message %s failed", receiver, msg_id, exc_info=True)
-        LOG.info("[Reply] [%s] message %s left the chat window; %s falls back to @", receiver, msg_id, style)
+        LOG.info("[Reply] [%s] message %s left the chat window; replying without %s", receiver, msg_id, style)
         return None
 
     @staticmethod
@@ -298,7 +299,7 @@ class WxAutoClient():
         try:
             raw_msg.tickle()
         except Exception:
-            LOG.warning("[Reply] [%s] tickling failed; falling back to @", receiver, exc_info=True)
+            LOG.warning("[Reply] [%s] tickling failed; sending the reply anyway", receiver, exc_info=True)
             return False
         LOG.info("[Reply] [%s] tickled the sender", receiver)
         # 等“拍了拍”的提示先出来，回复再跟在它后面

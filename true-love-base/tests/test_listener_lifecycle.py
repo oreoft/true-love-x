@@ -633,11 +633,10 @@ class ListenerLifecycleTests(unittest.TestCase):
     def test_reply_falls_back_to_at_when_the_message_cannot_be_used(self):
         cases = {
             "unknown id": ("quote", lambda raw: "other"),
-            "other chat": ("tickle", lambda raw: self.client._replyable.update(m1=(0, "elsewhere", raw)) or "m1"),
+            "other chat": ("quote", lambda raw: self.client._replyable.update(m1=(0, "elsewhere", raw)) or "m1"),
             "scrolled away": ("quote", lambda raw: setattr(raw.exists, "return_value", False) or "m1"),
             "quote failed": ("quote", lambda raw: setattr(raw.quote, "return_value", False) or "m1"),
             "quote raised": ("quote", lambda raw: setattr(raw.quote, "side_effect", RuntimeError("gone")) or "m1"),
-            "tickle raised": ("tickle", lambda raw: setattr(raw.tickle, "side_effect", RuntimeError("gone")) or "m1"),
         }
         for name, (style, prepare) in cases.items():
             with self.subTest(name):
@@ -649,6 +648,21 @@ class ListenerLifecycleTests(unittest.TestCase):
                     self.assertTrue(self.client.send_text("group", "answer", ["alice"], reply_id, style))
 
                 self.sdk.SendMsg.assert_called_once_with("answer", "group", at=["alice"])
+
+    def test_tickle_reply_is_sent_without_at_even_when_the_pat_fails(self):
+        cases = {
+            "unknown id": lambda raw: "other",
+            "tickle raised": lambda raw: setattr(raw.tickle, "side_effect", RuntimeError("gone")) or "m1",
+        }
+        for name, prepare in cases.items():
+            with self.subTest(name):
+                self.sdk.SendMsg.reset_mock()
+                reply_id = prepare(self.received())
+
+                with self.assertLogs("WxAutoClient", level="INFO"):
+                    self.assertTrue(self.client.send_text("group", "answer", ["alice"], reply_id, "tickle"))
+
+                self.sdk.SendMsg.assert_called_once_with("answer", "group", at=None)
 
     def test_only_recent_messages_are_kept_for_replies(self):
         for i in range(self.client_module.REPLY_KEEP_COUNT + 5):
