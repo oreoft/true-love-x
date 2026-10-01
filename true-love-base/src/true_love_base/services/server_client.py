@@ -189,11 +189,16 @@ def get_chat(msg: ChatMsg) -> str:
         return _get_error_message()
 
 
+# 消息没交给 server 时回给发消息的人：偶尔失败一次，和连续失败到熔断
+SEND_FAILED_REPLY = "啊哦~消息没送到服务端，稍后再试试捏~"
+SERVER_DOWN_REPLY = "啊哦~, 服务正在重新调整，请稍后重试再试"
+
+
 def _get_error_message() -> str:
     """获取错误提示消息"""
     if _circuit_breaker.fail_count < _circuit_breaker.threshold:
-        return "啊哦~消息没送到服务端，稍后再试试捏~"
-    return "啊哦~, 服务正在重新调整，请稍后重试再试"
+        return SEND_FAILED_REPLY
+    return SERVER_DOWN_REPLY
 
 
 # ==================== 监听列表 ====================
