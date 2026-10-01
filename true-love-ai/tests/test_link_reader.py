@@ -3,6 +3,7 @@
 import types
 import unittest
 from unittest.mock import patch
+from urllib.parse import quote
 
 from true_love_common.http.client import HttpResult
 
@@ -63,12 +64,19 @@ class LinkReaderTests(unittest.TestCase):
             self.assertEqual(link_reader.read("https://sspai.com/post/1"), "")
         scrape.assert_not_called()
 
-    def test_xiaohongshu_needs_a_login_so_it_is_skipped(self):
-        with patch.object(link_reader, "get") as fetch, patch.object(link_reader, "post_json") as scrape:
-            for url in ("https://www.xiaohongshu.com/discovery/item/1", "http://xhslink.com/a/b"):
-                self.assertEqual(link_reader.read(url), "")
-        fetch.assert_not_called()
-        scrape.assert_not_called()
+    def test_xiaohongshu_login_redirect_is_read_at_the_note_it_points_to(self):
+        note = ("https://www.xiaohongshu.com/discovery/item/6ab7?app_platform=android&xsec_token=CB="
+                "&xsec_source=app_share")
+        wrapped = ("https://www.xiaohongshu.com/login?redirectPath=https://www.xiaohongshu.com/discovery/item/6ab7"
+                   "?app_platform=android%26xsec_token=CB=%26xsec_source=app_share&wechatWid=8f&wechatOrigin=menu")
+        encoded = "https://www.xiaohongshu.com/login?redirectPath=" + quote(note, safe="")
+        with patch.object(link_reader, "get_config", return_value=config()), \
+                patch.object(link_reader, "post_json",
+                             return_value=firecrawl({"success": True, "data": {"markdown": "笔记正文"}})) as scrape:
+            for url in (wrapped, encoded, note):
+                self.assertEqual(link_reader.read(url), "笔记正文")
+
+        self.assertEqual([c.args[1]["url"] for c in scrape.call_args_list], [note, note, note])
 
     def test_long_text_is_cut(self):
         long_article = ARTICLE.replace("北京时间今天下午", "字" * 5000)

@@ -3,8 +3,8 @@
 Link Reader - 读链接的正文，交给模型
 
 - 公众号文章（mp.weixin.qq.com）不用登录，直接请求网页，取 js_content 里的正文
-- 其余链接交给 Firecrawl（platform_key.firecrawl_api_key），没配 key 就不读
-- 小红书要登录才看得到正文，谁都读不到，直接跳过，省 Firecrawl 的额度
+- 其余链接交给 Firecrawl（platform_key.firecrawl_api_key），没配 key 就不读。
+  小红书直接请求只有登录页，Firecrawl 读得到；微信里复制出来的有时是登录跳转地址，先还原成原笔记地址
 
 读不到返回空串，调用方只用消息里原有的标题和链接。
 """
@@ -12,7 +12,7 @@ Link Reader - 读链接的正文，交给模型
 import html
 import logging
 import re
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
 from true_love_common.http.client import get, post_json
@@ -25,20 +25,17 @@ MAX_CHARS = 3000
 FIRECRAWL_URL = "https://api.firecrawl.dev/v2/scrape"
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
-LOGIN_ONLY_HOSTS = ("xiaohongshu.com", "xhslink.com")
 
 
 def read(url: str) -> str:
     """链接的标题和正文，最多 MAX_CHARS 字；读不到返回空串"""
     if not url:
         return ""
+    url = _unwrap_login(url)
     host = (urlparse(url).hostname or "").lower()
     try:
         if host == "mp.weixin.qq.com":
             text = _read_wechat_article(url)
-        elif any(host == h or host.endswith("." + h) for h in LOGIN_ONLY_HOSTS):
-            LOG.info("链接要登录才能看，跳过: %s", url)
-            return ""
         else:
             text = _read_with_firecrawl(url)
     except Exception as e:
@@ -47,6 +44,16 @@ def read(url: str) -> str:
     if not text:
         LOG.warning("链接没读到正文: %s", url)
     return text[:MAX_CHARS]
+
+
+def _unwrap_login(url: str) -> str:
+    """小红书的登录跳转地址（xiaohongshu.com/login?redirectPath=原地址）还原成原地址"""
+    parsed = urlparse(url)
+    if (parsed.hostname or "").endswith("xiaohongshu.com") and parsed.path.rstrip("/") == "/login":
+        target = parse_qs(parsed.query).get("redirectPath", [""])[0]
+        if target.startswith("http"):
+            return target
+    return url
 
 
 def _read_wechat_article(url: str) -> str:
