@@ -9,7 +9,8 @@ WeChatClient - 微信 base 的专属接口
     POST {callback}/groups/mute-all         {}
     POST {callback}/execute/wx              {"name", "params"}
     POST {callback}/execute/chat            {"chat_name", "name", "params"}
-    POST {callback}/execute/batch-chat-info {"chat_names"}
+    POST {callback}/listen/status            {"chat_names"}
+    POST {callback}/listen/probe             {"chat_name"}
 """
 
 import logging
@@ -22,6 +23,8 @@ LOG = logging.getLogger("WeChatClient")
 _LISTEN_ADD_TIMEOUT = (2, 30)
 # 一键群免打扰要逐个点开会话列表里的会话，会话多时要等一会儿
 _MUTE_ALL_TIMEOUT = (2, 300)
+# 测活要读一遍聊天窗口里的消息，m8s 实测 9~14 秒
+_PROBE_TIMEOUT = (2, 30)
 
 
 class WeChatClient(BaseClient):
@@ -62,4 +65,4 @@ class WeChatClient(BaseClient):
         return await self._call("listen_status", "/listen/status", {"chat_names": chat_names})
 
     async def probe_listen(self, chat_name: str) -> dict:
-        return await self._call("probe_listen", "/listen/probe", {"chat_name": chat_name})
+        return await self._call("probe_listen", "/listen/probe", {"chat_name": chat_name}, timeout=_PROBE_TIMEOUT)
