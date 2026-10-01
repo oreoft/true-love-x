@@ -1,5 +1,6 @@
 """Lifecycle regression tests; isolate Windows UI, HTTP and local configuration."""
 
+import contextlib
 import importlib.util
 import sys
 import threading
@@ -16,6 +17,11 @@ def module(name, **attributes):
     result = types.ModuleType(name)
     result.__dict__.update(attributes)
     return result
+
+
+def setup(chats, private_poll=False):
+    """server 返回的监听设置"""
+    return types.SimpleNamespace(chats=chats, private_poll=private_poll)
 
 
 def load_source(name, path):
@@ -37,7 +43,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.sdk.IsOnline.return_value = True
         self.wechat_running = True
         self.server = types.SimpleNamespace(
-            get_chat=Mock(), fetch_listen_chats=Mock(return_value=[]), use_identity=Mock())
+            get_chat=Mock(), fetch_listen_chats=Mock(return_value=setup([])), use_identity=Mock())
 
         def open_wechat(**kwargs):
             if not self.wechat_running:
@@ -53,6 +59,12 @@ class ListenerLifecycleTests(unittest.TestCase):
                 "true_love_base.wxautox4x.wxautox4x", WeChat=open_wechat
             ),
             "wxautox4.param": module("wxautox4.param", WxParam=type("WxParam", (), {})),
+            "wxautox4.uia.uiautomation": module(
+                "wxautox4.uia.uiautomation", InitializeUIAutomationInCurrentThread=lambda: None
+            ),
+            "wxautox4.utils.lock": module(
+                "wxautox4.utils.lock", ui_transaction=lambda timeout=30.0: contextlib.nullcontext()
+            ),
             "true_love_common.chat_msg": module("true_love_common.chat_msg", ChatMsg=object),
             "true_love_common.observability.logging": module(
                 "true_love_common.observability.logging", LoggingConfig=Mock()
@@ -87,6 +99,8 @@ class ListenerLifecycleTests(unittest.TestCase):
         sys.modules["true_love_base.core"] = module(
             "true_love_base.core", WxAutoClient=self.client_module.WxAutoClient
         )
+        self.poller_module = load_source("lifecycle_poller", "services/private_poller.py")
+        sys.modules["true_love_base.services.private_poller"] = self.poller_module
         self.robot_module = load_source("lifecycle_robot", "services/robot.py")
         sys.modules["true_love_base.services.robot"] = self.robot_module
         sys.modules["true_love_base.services.wx_supervisor"] = load_source(
@@ -178,7 +192,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.assertEqual(delivered, [first])
 
     def test_startup_cancellation_skips_remaining_chats(self):
-        self.server.fetch_listen_chats.return_value = ["first", "second"]
+        self.server.fetch_listen_chats.return_value = setup(["first", "second"])
         robot = self.robot_module.Robot(self.client)
         self.addCleanup(robot.cleanup)
         stopped = threading.Event()
@@ -190,7 +204,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.sdk.AddListenChat.side_effect = register
         result = robot.load_listen_chats(stop_event=stopped)
 
-        self.assertEqual(result, {"success": ["first"], "failed": [], "unavailable": False})
+        self.assertEqual(result, {"success": ["first"], "failed": [], "unavailable": False, "private_poll": False})
         self.assertEqual([call.args[0] for call in self.sdk.AddListenChat.call_args_list], ["first"])
 
     def test_startup_cancellation_stops_registration_retries(self):
@@ -215,11 +229,11 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         result = robot.load_listen_chats(stop_event=threading.Event())
 
-        self.assertEqual(result, {"success": [], "failed": [], "unavailable": True})
+        self.assertEqual(result, {"success": [], "failed": [], "unavailable": True, "private_poll": False})
         self.sdk.AddListenChat.assert_not_called()
 
     def test_listeners_are_registered_in_the_order_the_server_returns(self):
-        self.server.fetch_listen_chats.return_value = ["first", "second"]
+        self.server.fetch_listen_chats.return_value = setup(["first", "second"])
         robot = self.robot_module.Robot(self.client)
         self.addCleanup(robot.cleanup)
         stop = threading.Event()
@@ -227,7 +241,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         result = robot.load_listen_chats(stop_event=stop)
 
         self.server.fetch_listen_chats.assert_called_once_with(stop)
-        self.assertEqual(result, {"success": ["first", "second"], "failed": [], "unavailable": False})
+        self.assertEqual(result, {"success": ["first", "second"], "failed": [], "unavailable": False, "private_poll": False})
         self.assertEqual([call.args[0] for call in self.sdk.AddListenChat.call_args_list], ["first", "second"])
 
     def test_listener_is_not_registered_when_its_chat_window_never_opened(self):
@@ -279,7 +293,7 @@ class ListenerLifecycleTests(unittest.TestCase):
             if cancel_loading:
                 shutdown.is_set.return_value = True
             if unavailable:
-                return {"success": [], "failed": [], "unavailable": True}
+                return {"success": [], "failed": [], "unavailable": True, "private_poll": False}
             return {"success": ["group"], "failed": [], "unavailable": False}
 
         robot.load_listen_chats.side_effect = load
@@ -409,6 +423,102 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         self.assertEqual(self.events, ["http", "load", "stop-sdk", "drain"])
 
+
+    # ==================== 私聊轮询 ====================
+
+    def polled(self, chat_type, *attrs, chat_name="friend"):
+        self.sdk.GetNextNewMessage.return_value = {
+            "chat_name": chat_name, "chat_type": chat_type,
+            "msg": [types.SimpleNamespace(attr=attr, content=attr) for attr in attrs],
+        }
+        self.client_module.convert_message.side_effect = lambda raw, chat, **kwargs: (chat, raw.content)
+
+    def test_poll_returns_only_what_others_sent_in_a_private_chat(self):
+        self.polled("friend", "friend", "self", "system", "friend")
+
+        self.assertEqual(self.client.next_private_messages(), [("friend", "friend"), ("friend", "friend")])
+        self.sdk.GetNextNewMessage.assert_called_once_with(filter_mute=True)
+
+    def test_poll_drops_a_chat_that_is_not_private(self):
+        self.polled("group", "friend", chat_name="group")
+
+        with self.assertLogs("WxAutoClient", level="INFO"):
+            self.assertEqual(self.client.next_private_messages(), [])
+        self.client_module.convert_message.assert_not_called()
+
+    def test_poll_reports_when_nothing_is_unread(self):
+        self.sdk.GetNextNewMessage.return_value = {}
+
+        self.assertIsNone(self.client.next_private_messages())
+
+    def test_poller_forwards_private_messages_and_keeps_polling_while_chats_are_unread(self):
+        client = Mock(**{"is_connected.return_value": True})
+        message = types.SimpleNamespace(chat_name="friend")
+        client.next_private_messages.side_effect = [[message], [], None]
+        received = []
+        poller = self.poller_module.PrivatePoller(client, lambda msg, chat: received.append(chat))
+        poller._enabled = True
+
+        self.assertTrue(poller._poll_once())
+        self.assertTrue(poller._poll_once())
+        self.assertFalse(poller._poll_once())
+
+        self.assertEqual(received, ["friend"])
+
+    def test_poller_does_not_touch_wechat_when_disabled_or_offline(self):
+        client = Mock(**{"is_connected.return_value": False})
+        poller = self.poller_module.PrivatePoller(client, Mock())
+
+        self.assertFalse(poller._poll_once())
+        poller._enabled = True
+        self.assertFalse(poller._poll_once())
+
+        client.next_private_messages.assert_not_called()
+
+    def test_poller_thread_stops_with_the_robot(self):
+        client = Mock(**{"is_connected.return_value": True, "next_private_messages.return_value": None})
+        robot = self.robot_module.Robot(self.client)
+        poller = self.poller_module.PrivatePoller(client, Mock(), interval=0.01)
+        robot.private_poller = poller
+
+        poller.set_enabled(True)
+        robot.cleanup()
+
+        self.assertFalse(poller._thread.is_alive())
+        self.assertTrue(client.next_private_messages.called)
+
+    def test_server_setting_turns_the_private_poll_on(self):
+        self.server.fetch_listen_chats.return_value = setup(["first"], private_poll=True)
+        robot = self.robot_module.Robot(self.client)
+        self.addCleanup(robot.cleanup)
+        robot.private_poller.set_enabled = Mock()
+
+        result = robot.load_listen_chats(stop_event=threading.Event())
+
+        robot.private_poller.set_enabled.assert_called_once_with(True)
+        self.assertTrue(result["private_poll"])
+
+    # ==================== 一键群免打扰 ====================
+
+    def test_mute_all_groups_mutes_each_group_once(self):
+        sessions = {name: Mock(ismute=muted) for name, muted in (("loud", False), ("quiet", True), ("stuck", False))}
+        for name, session in sessions.items():
+            session.name = name
+        sessions["loud"].select_option.side_effect = lambda option: setattr(sessions["loud"], "ismute", True) or True
+        sessions["stuck"].select_option.return_value = False
+        self.sdk.GetAllRecentGroups.return_value = [("loud", 3), ("quiet", 5), ("stuck", 7), ("gone", 9)]
+        self.sdk.GetSession.side_effect = lambda: list(sessions.values())
+
+        with self.assertLogs("WxAutoClient", level="INFO"):
+            result = self.client.mute_all_groups()
+
+        self.assertEqual(result, {
+            "total": 4, "muted": ["loud"], "already": ["quiet"],
+            "failed": [{"chat": "stuck", "reason": "右键菜单里没有免打扰"}, {"chat": "gone", "reason": "会话列表里找不到"}],
+        })
+        sessions["loud"].select_option.assert_called_once_with("消息免打扰")
+        sessions["quiet"].select_option.assert_not_called()
+        self.sdk.ChatWith.assert_called_once_with("gone", exact=True)
 
 if __name__ == "__main__":
     unittest.main()

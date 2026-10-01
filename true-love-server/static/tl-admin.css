@@ -67,7 +67,7 @@ main { padding: 20px 24px 40px; min-width: 0; }
 main > .page { display: flex; flex-direction: column; gap: 16px; }
 h2 { font-size: 18px; margin: 0; }
 .head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.head .grow { flex: 1; }
+.head .grow, .listen-settings .grow { flex: 1; }
 .banner { border-radius: 8px; padding: 10px 14px; background: var(--bad-soft); color: var(--bad); font-size: 13px; }
 .note { border-left: 3px solid var(--accent); background: var(--accent-soft); padding: 8px 12px; border-radius: 0 6px 6px 0; font-size: 12.5px; }
 .empty { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 24px; text-align: center; color: var(--muted); }
@@ -133,6 +133,7 @@ td.wrap { max-width: 320px; overflow-wrap: anywhere; }
 /* 监听 */
 .listen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .listen { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+.listen-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 12px; }
 .listen .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .listen .row b { overflow-wrap: anywhere; }
 .add { border: 1px dashed var(--line); background: none; border-radius: 10px; color: var(--muted); min-height: 96px; }

@@ -136,6 +136,7 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
     success_chats = load_result["success"]
     failed_chats = load_result["failed"]
     unavailable = load_result["unavailable"]
+    private_poll = load_result.get("private_poll", False)
 
     if unavailable:
         LOG.error("Listen chats unavailable from server; not listening to any chat until the server restores them")
@@ -160,6 +161,7 @@ def init_listening(robot: Robot, stop_event: Event, *, reconnected: bool = False
 
         headline = "tl-base 重新连上微信" if reconnected else "tl-base 启动成功"
         startup_msg = f"{headline}\n\n当前监听列表 ({len(success_chats)}个):\n{success_list_str}"
+        startup_msg += f"\n\n私聊轮询：{'开' if private_poll else '关'}"
         if failed_chats:
             startup_msg += f"\n\n监听失败 ({len(failed_chats)}个):\n{failed_list_str}"
         if unavailable:

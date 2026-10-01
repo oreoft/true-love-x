@@ -3,7 +3,7 @@
 Server Client - 与后端 AI 服务通信
 
 负责把消息转发到服务端的 /base/on-message；服务端只确认收到，AI 回复由服务端异步回调 base 发送。
-连上微信时从服务端的 /base/listen/list 取监听列表。
+连上微信时从服务端的 /base/listen/list 取监听列表和私聊轮询开关。
 每次请求都带上这个 base 的机器人信息（bot_id、回调地址、昵称），server 据此登记和回调。
 使用全局 httpx.Client 复用 HTTP 连接，线程安全的熔断器。
 """
@@ -11,7 +11,7 @@ Server Client - 与后端 AI 服务通信
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable, NamedTuple, Optional
 
 import httpx
 
@@ -206,26 +206,34 @@ LISTEN_FETCH_FIRST_DELAY = 2
 LISTEN_FETCH_MAX_DELAY = 60
 
 
-def _get_listen_chats() -> list[str]:
-    """向 server 取一次监听列表，失败时抛异常"""
+class ListenSetup(NamedTuple):
+    """server 上这个机器人的收消息设置"""
+    chats: list[str]  # 开子窗口监听的群和好友
+    private_poll: bool  # 没开子窗口的私聊是否靠主窗口红点轮询来收
+
+
+def _get_listen_setup() -> ListenSetup:
+    """向 server 取一次监听设置，失败时抛异常"""
     payload = {"token": config.http_token, "bot": bot_info().to_dict()}
     response = post_json(LISTEN_LIST_ENDPOINT, payload, timeout=(2, 10), client=_get_client())
     response.raise_for_status()
     resp_data = response.data if isinstance(response.data, dict) else {}
     if resp_data.get("code") != 0:
         raise RuntimeError(f"server returned {resp_data}")
-    chats = (resp_data.get("data") or {}).get("chats")
+    data = resp_data.get("data") or {}
+    chats = data.get("chats")
     if not isinstance(chats, list):
         raise RuntimeError(f"server returned no chat list: {resp_data}")
-    return [str(chat) for chat in chats]
+    # 没有这个字段的旧 server 当作关闭
+    return ListenSetup([str(chat) for chat in chats], bool(data.get("private_poll")))
 
 
-def fetch_listen_chats(stop_event: threading.Event) -> Optional[list[str]]:
+def fetch_listen_chats(stop_event: threading.Event) -> Optional[ListenSetup]:
     """
-    向 server 取监听列表，失败时退避重试
+    向 server 取监听设置，失败时退避重试
 
     Returns:
-        监听列表；到截止时间还没取到或收到退出信号时返回 None
+        监听设置；到截止时间还没取到或收到退出信号时返回 None
     """
     deadline = time.monotonic() + LISTEN_FETCH_DEADLINE
     delay = LISTEN_FETCH_FIRST_DELAY
@@ -233,7 +241,7 @@ def fetch_listen_chats(stop_event: threading.Event) -> Optional[list[str]]:
     while True:
         attempt += 1
         try:
-            return _get_listen_chats()
+            return _get_listen_setup()
         except Exception as e:
             remaining = deadline - time.monotonic()
             if remaining <= 0:

@@ -10,12 +10,14 @@ import logging
 import os
 import time
 from datetime import datetime
-from threading import Lock
+from threading import Lock, local
 from typing import Callable, Optional
 
 # This is a special import, please do not modify
 from true_love_base.wxautox4x.wxautox4x import WeChat
 from wxautox4.param import WxParam
+from wxautox4.uia.uiautomation import InitializeUIAutomationInCurrentThread
+from wxautox4.utils.lock import ui_transaction
 
 from true_love_common.chat_msg import ChatMsg
 from true_love_base.models.message_converter import convert_message
@@ -40,6 +42,22 @@ MessageCallback = Callable[[ChatMsg, str], None]
 SEND_CONFIRM_SECONDS = 10
 # 自己发出的文件在监听里的消息类型
 _SELF_MEDIA_TYPES = {"image", "file", "video", "voice"}
+# 不转给 server 的消息：微信团队、系统提示、自己发的
+_IGNORED_ATTRS = {"weixin", "system", "self"}
+
+# SDK 操作界面的方法（发消息、加监听、切换会话）都在 ui_transaction 里执行，它可重入，跨线程也跨进程；
+# GetNextNewMessage 和会话右键菜单没有加锁，要自己包一层，免得轮询点开会话时正好有人在主窗口里发消息
+# 会话右键菜单里开关免打扰的选项
+_MUTE_OPTION = "消息免打扰"
+
+# 在主线程以外读会话列表要先在这个线程里初始化 UIA；不初始化时 GetNextNewMessage 不报错，只是永远拿不到消息
+_uia_thread = local()
+
+
+def _init_uia_in_thread() -> None:
+    if not getattr(_uia_thread, "ready", False):
+        InitializeUIAutomationInCurrentThread()
+        _uia_thread.ready = True
 
 
 class WxAutoClient():
@@ -349,7 +367,7 @@ class WxAutoClient():
                 LOG.info('--------------Start------------------')
                 attr = getattr(raw_msg, 'attr', '')
                 # 快速过滤：在消息转换之前过滤，减少不必要的处理
-                if attr.lower() in ['weixin', 'system', 'self']:
+                if attr.lower() in _IGNORED_ATTRS:
                     if attr.lower() == 'self':
                         self._remember_self_media(chat_name, raw_msg)
                     LOG.info(f"ignored system message attr is [{attr}]")
@@ -396,6 +414,91 @@ class WxAutoClient():
             except Exception:
                 LOG.exception("Failed to add listener for [%s]", chat_name)
                 return False
+
+    # ==================== 私聊轮询 ====================
+
+    def next_private_messages(self) -> Optional[list[ChatMsg]]:
+        """
+        点开主窗口里下一个有红点的会话，取出新消息；只留私聊，其他会话的红点点掉就算了
+
+        开了子窗口的聊天不出红点，这里拿不到；免打扰的会话直接跳过，所以群都设成免打扰就不会被点开。
+
+        Returns:
+            没有红点时返回 None；点开了一个会话时返回其中的私聊消息（不是私聊时是空列表）
+        """
+        _init_uia_in_thread()
+        with ui_transaction():
+            result = self.wx.GetNextNewMessage(filter_mute=True)
+        if not result:
+            return None
+        chat_name = result.get("chat_name", "")
+        chat_type = result.get("chat_type", "")
+        raw_msgs = result.get("msg") or []
+        if chat_type != "friend":
+            LOG.info("Private poll skipped %d messages from [%s] (%s)", len(raw_msgs), chat_name, chat_type)
+            return []
+        messages = []
+        for raw_msg in raw_msgs:
+            if str(getattr(raw_msg, "attr", "")).lower() in _IGNORED_ATTRS:
+                continue
+            try:
+                messages.append(convert_message(raw_msg, chat_name, bot_id=self._bot_id, bot_name=self._self_name))
+            except Exception:
+                LOG.exception("Failed to convert a polled message from [%s]", chat_name)
+        LOG.info("Private poll got %d messages from [%s]", len(messages), chat_name)
+        return messages
+
+    # ==================== 会话设置 ====================
+
+    def mute_all_groups(self) -> dict:
+        """
+        把通讯录里的群都设成消息免打扰，已经免打扰的跳过
+
+        Returns:
+            {"total": 群数, "muted": [新设的], "already": [本来就是的], "failed": [{"chat", "reason"}]}
+        """
+        muted, already, failed = [], [], []
+        _init_uia_in_thread()
+        with ui_transaction():
+            groups = [str(group[0]) for group in (self.wx.GetAllRecentGroups() or [])]
+            self.wx.SwitchToChat()
+            for name in groups:
+                try:
+                    session = self._session(name)
+                    if session is None:
+                        # 会话列表里没有的群先打开一次，它就会出现在列表里
+                        self.wx.ChatWith(name, exact=True)
+                        session = self._session(name)
+                    if session is None:
+                        failed.append({"chat": name, "reason": "会话列表里找不到"})
+                    elif session.ismute:
+                        already.append(name)
+                    elif not session.select_option(_MUTE_OPTION):
+                        failed.append({"chat": name, "reason": "右键菜单里没有免打扰"})
+                    elif self._wait_muted(name):
+                        muted.append(name)
+                    else:
+                        failed.append({"chat": name, "reason": "设置后仍不是免打扰"})
+                except Exception as e:
+                    LOG.exception("Failed to mute group [%s]", name)
+                    failed.append({"chat": name, "reason": str(e)})
+        LOG.info("Muted groups: total=%d muted=%d already=%d failed=%s",
+                 len(groups), len(muted), len(already), failed)
+        return {"total": len(groups), "muted": muted, "already": already, "failed": failed}
+
+    def _wait_muted(self, name: str, seconds: float = 3.0) -> bool:
+        """设完免打扰后会话列表要过一会儿才显示出来，等它变过来"""
+        deadline = time.monotonic() + seconds
+        while True:
+            if getattr(self._session(name), "ismute", False):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.3)
+
+    def _session(self, name: str):
+        """主窗口会话列表里名字相同的会话，没有返回 None"""
+        return next((s for s in self.wx.GetSession() or [] if s.name == name), None)
 
     # ==================== 生命周期 ====================
 

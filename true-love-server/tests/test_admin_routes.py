@@ -146,6 +146,39 @@ class ListenPageTests(ServerCase):
 
         self.assertEqual(data["summary"], {"healthy": 1, "unhealthy": 0})
 
+    def test_private_poll_is_saved_and_pushed_to_the_base(self):
+        callback = self.register("wxid_ser")
+        self.bases.reply(f"{callback}/listen/private-poll", {"code": 0, "data": {"enabled": True}})
+
+        data = self.post("/admin/bots/wxid_ser/listen/private-poll", token=None, enabled=True)["data"]
+
+        self.assertEqual(data, {"private_poll": True, "applied": True})
+        self.assertEqual(self.get("/admin/bots/wxid_ser/listen/settings")["data"], {"private_poll": True})
+        [(url, payload)] = self.bases.sent()
+        self.assertEqual((url, payload), (f"{callback}/listen/private-poll", {"enabled": True}))
+
+    def test_private_poll_is_saved_while_the_base_is_offline(self):
+        callback = self.register("wxid_ser")
+        self.bases.reply(f"{callback}/listen/private-poll", error=ConnectionError("base is down"))
+
+        with self.assertLogs("WeChatClient", level="ERROR"):
+            data = self.post("/admin/bots/wxid_ser/listen/private-poll", token=None, enabled=True)["data"]
+
+        self.assertEqual(data, {"private_poll": True, "applied": False})
+        self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["private_poll"])
+
+    def test_private_poll_needs_a_yes_or_no(self):
+        self.register("wxid_ser")
+
+        self.assertNotEqual(self.post("/admin/bots/wxid_ser/listen/private-poll", token=None, enabled="yes")["code"], 0)
+
+    def test_mute_all_groups_runs_on_the_base_of_the_chosen_bot(self):
+        callback = self.register("wxid_ser")
+        result = {"total": 2, "muted": ["群A"], "already": ["群B"], "failed": []}
+        self.bases.reply(f"{callback}/groups/mute-all", {"code": 0, "data": result})
+
+        self.assertEqual(self.post("/admin/bots/wxid_ser/listen/mute-all-groups", token=None)["data"], result)
+
     def test_bot_on_another_platform_has_no_listen_page(self):
         self.register("lark_app", platform="lark")
 

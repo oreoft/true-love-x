@@ -1,6 +1,7 @@
 """Base must outlive WeChat: start without it, connect later, notice when it drops."""
 
 import asyncio
+import contextlib
 import importlib.util
 import sys
 import threading
@@ -59,6 +60,12 @@ def load_client_module(desktop, real_converter=False):
     dependencies = {
         "true_love_base.wxautox4x.wxautox4x": module("true_love_base.wxautox4x.wxautox4x", WeChat=desktop.open),
         "wxautox4.param": module("wxautox4.param", WxParam=type("WxParam", (), {})),
+        "wxautox4.uia.uiautomation": module(
+            "wxautox4.uia.uiautomation", InitializeUIAutomationInCurrentThread=lambda: None
+        ),
+        "wxautox4.utils.lock": module(
+            "wxautox4.utils.lock", ui_transaction=lambda timeout=30.0: contextlib.nullcontext()
+        ),
         "true_love_base.utils.path_resolver": module(
             "true_love_base.utils.path_resolver", get_wx_imgs_dir=lambda: None, to_server_path=lambda path: path
         ),

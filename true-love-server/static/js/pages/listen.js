@@ -1,7 +1,8 @@
 /**
- * 监听管理（微信专属）：看每个监听是否健康，测活、重置、移除、添加
+ * 监听管理（微信专属）：看每个监听是否健康，测活、重置、移除、添加；
+ * 私聊轮询开关（没开子窗口的私聊靠主窗口红点来收）和一键群免打扰
  *
- * 这些操作都要调 base，base 离线时按钮变灰。
+ * 这些操作都要调 base，base 离线时按钮变灰；私聊轮询开关离线时也能改，base 下次连上微信时生效。
  */
 
 import { botApi } from '../api.js';
@@ -23,6 +24,12 @@ export async function show(root, ctx) {
         statusError = e.message;
     }
     const { listeners, summary } = status;
+    let privatePoll = false;
+    try {
+        privatePoll = (await api.listenSettings()).private_poll;
+    } catch (e) {
+        statusError = statusError || e.message;
+    }
     const reload = async () => {
         root.style.opacity = '0.5';
         root.style.pointerEvents = 'none';
@@ -39,6 +46,12 @@ export async function show(root, ctx) {
         <div class="head"><h2 class="grow">监听管理</h2><span class="tag">微信专属</span>
             <button class="btn" id="refresh" ${disabled}>智能刷新</button>
             <button class="btn" id="resetAll" ${disabled}>全部重置</button></div>
+        <div class="listen-settings">
+            <span>私聊轮询 <span class="pill ${privatePoll ? 'ok' : ''}">${privatePoll ? '开' : '关'}</span></span>
+            <span class="muted grow">没开子窗口的私聊靠主窗口红点来收；群要设成免打扰，轮询才不会点开它们</span>
+            <button class="btn sm" id="privatePoll">${privatePoll ? '关闭' : '打开'}</button>
+            <button class="btn sm" id="muteGroups" ${disabled}>一键群免打扰</button>
+        </div>
         ${statusError ? `<div class="banner">没取到监听状态：${esc(statusError)}</div>` : `
         <div class="muted">${summary.healthy}/${listeners.length} 健康${summary.unhealthy ? `，<span class="warn-text">${summary.unhealthy} 个需要处理</span>` : ''}</div>`}
         <div class="listen-grid">
@@ -67,6 +80,23 @@ export async function show(root, ctx) {
             if (result) toast(result.message);
             reload();
         }, '重置');
+    $('#privatePoll', root).onclick = async (e) => {
+        const result = await busy(e.target, '保存中…', () => attempt(() => api.listenPrivatePoll(!privatePoll)));
+        if (result) {
+            const state = result.private_poll ? '打开' : '关闭';
+            toast(result.applied ? `私聊轮询已${state}` : `私聊轮询已${state}，base 下次连上微信时生效`);
+        }
+        reload();
+    };
+    $('#muteGroups', root).onclick = (e) => confirmModal('把所有群设成免打扰？',
+        'base 会在微信里逐个打开群的右键菜单，群多时要等一两分钟。开了子窗口的群照常收消息。', async () => {
+            const result = await busy(e.target, '设置中…', () => attempt(() => api.listenMuteAllGroups()));
+            if (result) {
+                const failed = result.failed.map((item) => `${item.chat}（${item.reason}）`).join('、');
+                toast(`共 ${result.total} 个群：新设 ${result.muted.length} 个，原本就是 ${result.already.length} 个`
+                    + (failed ? `，失败：${failed}` : ''), failed ? 'error' : undefined);
+            }
+        }, '设置');
     $$('[data-probe]', root).forEach((el) => {
         const chat = listeners[el.dataset.probe].chat;
         el.onclick = async () => {

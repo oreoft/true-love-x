@@ -166,6 +166,48 @@ async def add_listen(request: dict[str, Any] | None = Body(default=None)) -> dic
         return ApiResponse.error(107, f"AddListenChat failed: {str(e)}").to_dict()
 
 
+@router.post("/listen/private-poll")
+async def set_private_poll(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+    """
+    打开或关闭私聊轮询：没开子窗口的私聊靠主窗口红点来收
+
+    开关存在 server，后台改了以后通知 base 立即生效；base 下次连上微信时也会从 server 取。
+
+    Request Body:
+        - enabled: 是否打开
+
+    Response:
+        - data: {"enabled": bool}
+    """
+    robot = _get_robot()
+    if robot is None:
+        return ApiErrors.ROBOT_NOT_READY.to_dict()
+    enabled = _payload(request).get("enabled")
+    if not isinstance(enabled, bool):
+        return ApiErrors.INVALID_PARAMS.to_dict()
+    robot.private_poller.set_enabled(enabled)
+    return ApiResponse.success({"enabled": robot.private_poller.enabled}).to_dict()
+
+
+@router.post("/groups/mute-all")
+async def mute_all_groups() -> dict[str, Any]:
+    """
+    把通讯录里的群都设成消息免打扰，私聊轮询就不会点开它们；逐个点右键菜单，群多时要等一会儿
+
+    Response:
+        - data: {"total", "muted": [...], "already": [...], "failed": [{"chat", "reason"}]}
+    """
+    robot = _get_robot()
+    unavailable = _unavailable(robot)
+    if unavailable is not None:
+        return unavailable
+    try:
+        return ApiResponse.success(await _run_wx_operation(robot.client.mute_all_groups)).to_dict()
+    except Exception as e:
+        LOG.exception("Failed to mute all groups")
+        return ApiResponse.error(107, f"mute all groups failed: {e}").to_dict()
+
+
 @router.post("/execute/wx")
 async def execute_wx(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
     """

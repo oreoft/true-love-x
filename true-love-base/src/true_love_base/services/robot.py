@@ -16,6 +16,7 @@ from typing import Callable, Optional
 from true_love_common.chat_msg import ChatMsg
 from true_love_base.core import WxAutoClient
 from true_love_base.services import server_client
+from true_love_base.services.private_poller import PrivatePoller
 
 
 class Robot:
@@ -56,6 +57,9 @@ class Robot:
 
         # 每个 chat_id 一个锁，保证同一聊天内消息顺序
         self._chat_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
+
+        # 没开子窗口的私聊靠主窗口红点轮询来收，开关随监听列表从 server 取
+        self.private_poller = PrivatePoller(client, self.on_message)
 
         self.LOG.info(f"Robot initialized, max_workers: {self.MAX_WORKERS}")
 
@@ -193,18 +197,21 @@ class Robot:
         self, *, stop_event: threading.Event
     ) -> dict:
         """
-        向 server 取监听列表并开始监听；取不到时一个都不监听
+        向 server 取监听设置，开始监听并按开关启停私聊轮询；取不到时一个都不监听，也不轮询
 
         Returns:
             包含成功和失败列表的字典:
             - success: 成功监听的聊天列表
             - failed: 监听失败的聊天列表
             - unavailable: 没从 server 取到监听列表时为 True
+            - private_poll: 私聊轮询是否开着
         """
-        chats = server_client.fetch_listen_chats(stop_event)
-        if chats is None:
-            return {"success": [], "failed": [], "unavailable": True}
-        self.LOG.info(f"Loading {len(chats)} listen chats from server")
+        setup = server_client.fetch_listen_chats(stop_event)
+        if setup is None:
+            return {"success": [], "failed": [], "unavailable": True, "private_poll": self.private_poller.enabled}
+        chats = setup.chats
+        self.private_poller.set_enabled(setup.private_poll)
+        self.LOG.info(f"Loading {len(chats)} listen chats from server, private poll: {setup.private_poll}")
 
         success = []
         failed = []
@@ -227,7 +234,7 @@ class Robot:
             else:
                 failed.append(chat_name)
 
-        return {"success": success, "failed": failed, "unavailable": False}
+        return {"success": success, "failed": failed, "unavailable": False, "private_poll": setup.private_poll}
 
     def cleanup(self) -> None:
         """
@@ -235,6 +242,7 @@ class Robot:
         
         关闭线程池，等待所有任务完成。
         """
+        self.private_poller.stop()
         # SDK callbacks already in flight may arrive after StopListening returns.
         with self._submission_lock:
             self._accepting_messages = False

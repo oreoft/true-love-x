@@ -20,6 +20,7 @@ from ..models.bot import PlatformBase
 from ..models.group_message import Base
 from ..models.schema_migration import SchemaMigration  # noqa: F401 — 确保 create_all() 能建表
 from ..models.listen_chat import ListenChat  # noqa: F401 — 确保 create_all() 能建表
+from ..models.bot_setting import BotSetting  # noqa: F401 — 确保 create_all() 能建表
 
 LOG = logging.getLogger("DBEngine")
 
