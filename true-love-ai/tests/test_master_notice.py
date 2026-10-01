@@ -50,10 +50,12 @@ class RunJobTests(unittest.IsolatedAsyncioTestCase):
         async def refuse(path, payload, timeout=None):
             return {"code": 400, "message": "找不到任务方法: notice_mei_yuan"}
 
-        with patch.object(job_skill, "_async_post", side_effect=refuse):
-            reply = await job_skill.run_job({"job_name": "notice_mei_yuan"}, {})
+        with patch.object(job_skill, "_async_post", side_effect=refuse), \
+                self.assertRaises(job_skill.SkillFailed) as failed:
+            await job_skill.run_job({"job_name": "notice_mei_yuan"}, {})
 
-        self.assertIn("找不到任务方法", reply)
+        # 失败的原因交给模型转述，结局记成 tool_failed
+        self.assertIn("找不到任务方法", str(failed.exception))
 
     async def test_daily_push_can_still_be_triggered_by_hand(self):
         async def accept(path, payload, timeout=None):

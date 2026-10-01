@@ -11,7 +11,7 @@ import logging
 import sqlite3
 from datetime import datetime
 
-LOG = logging.getLogger("migrate")
+LOG = logging.getLogger("Migrate")
 
 VERSION = "004"
 DESCRIPTION = "skill_access: one platform-wide permission list per skill, points written as platform:bot:group:person"

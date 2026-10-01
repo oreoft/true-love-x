@@ -57,12 +57,14 @@ async def on_message(request: dict, background_tasks: BackgroundTasks):
 
     Body:
         - msg: ChatMsg.to_dict()，媒体是 base 上的相对路径，交给 AI 前换成 base 的 URL
+        - archive_only: base 补发的、已经提示过用户重发的消息，只存档不交给 AI
     """
     bot = _register(request)
     msg = ChatMsg.from_dict(request.get("msg", {}))
-    LOG.info("聊天消息收到请求: bot_id=%s chat=%s sender=%s type=%s",
-             bot.bot_id, msg.chat_id, msg.sender_id, msg.msg_type)
-    background_tasks.add_task(handle_incoming, bot, msg)
+    archive_only = bool(request.get("archive_only"))
+    LOG.info("聊天消息收到请求: bot_id=%s chat=%s sender=%s type=%s archive_only=%s",
+             bot.bot_id, msg.chat_id, msg.sender_id, msg.msg_type, archive_only)
+    background_tasks.add_task(handle_incoming, bot, msg, archive_only)
     return ApiResponse(data="")
 
 

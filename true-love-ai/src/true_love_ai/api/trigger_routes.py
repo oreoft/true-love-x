@@ -53,4 +53,4 @@ async def _run_agent(msg: ChatMsg) -> None:
             try:
                 await get_agent_loop().finish(msg, Ending(Outcome.CRASHED, detail=repr(e)[:200]))
             except Exception as ex:
-                LOG.error("收尾失败: %s", ex)
+                LOG.exception("收尾失败: %s", ex)

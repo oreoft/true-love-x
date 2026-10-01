@@ -20,9 +20,14 @@ class ChatRequest:
     token: str
     bot: BotInfo
     message: ChatMsg
+    # 补发一条已经提示过用户重发的消息，只为存档，不用再交给 AI
+    archive_only: bool = False
 
     def to_dict(self) -> dict[str, Any]:
-        return {"token": self.token, "bot": self.bot.to_dict(), "msg": self.message.to_dict()}
+        result = {"token": self.token, "bot": self.bot.to_dict(), "msg": self.message.to_dict()}
+        if self.archive_only:
+            result["archive_only"] = True
+        return result
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False)

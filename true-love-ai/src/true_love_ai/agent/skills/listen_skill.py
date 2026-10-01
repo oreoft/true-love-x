@@ -2,7 +2,7 @@
 """监听管理 Skill（通过 Server /action/listen/* 实现，谁能用在 tl-admin 的技能页设置）"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("ListenSkill")
 
@@ -45,12 +45,12 @@ async def listen_manage(params: dict, ctx: dict) -> str:
         result = await listen_add(target)
         if result.get("code") == 0:
             return f"好耶~添加监听成功: {target}"
-        return f"呜呜~添加监听失败: {result.get('msg', '未知错误')}"
+        raise SkillFailed(f"呜呜~添加监听失败: {result.get('message', '未知错误')}")
 
     if action == "remove":
         result = await listen_remove(target)
         if result.get("code") == 0:
             return f"好耶~删除监听成功: {target}"
-        return f"呜呜~删除监听失败: {result.get('msg', '未知错误')}"
+        raise SkillFailed(f"呜呜~删除监听失败: {result.get('message', '未知错误')}")
 
     return "诶嘿~不支持该操作，支持：add / remove"

@@ -121,7 +121,7 @@ async def async_post_json(url: str, payload: dict[str, Any], **kwargs: Any) -> H
 
 def _ok_result(method: str, url: str, response: Any, start: float, quiet: bool = False) -> HttpResult:
     result = _result_from_httpx_response(method, url, response, (time.perf_counter() - start) * 1000)
-    if not quiet:
+    if not quiet or not result.ok:
         _log_end(result)
     return result
 
@@ -194,7 +194,9 @@ def _log_start(method: str, url: str, kwargs: dict[str, Any]) -> None:
 
 
 def _log_end(result: HttpResult) -> None:
-    LOG.info(
+    # 对端回 4xx/5xx 也是失败，按 WARNING 记，按级别筛才不会漏
+    LOG.log(
+        logging.INFO if result.ok else logging.WARNING,
         "HTTP OUT end method=%s url=%s status=%s cost_ms=%.0f body=%s",
         result.method,
         result.url,

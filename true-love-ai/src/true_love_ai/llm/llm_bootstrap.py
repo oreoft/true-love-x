@@ -3,7 +3,7 @@ import logging
 
 from true_love_ai.core.model_registry import get_model_registry
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("LLMBootstrap")
 
 
 def init_llm():

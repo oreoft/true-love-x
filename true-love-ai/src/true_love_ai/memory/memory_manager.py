@@ -54,19 +54,15 @@ def get_user_context(group_id: str, sender_id: str) -> Optional[str]:
         parts = [f"{_format_key(m['key'])}：{m['value']}" for m in memories]
         return " | ".join(parts)
     except Exception as e:
-        LOG.error("get_user_context 失败: group=%s sender_id=%s err=%s", group_id, sender_id, e)
+        # 画像只是锦上添花，查不到也照常回复
+        LOG.exception("get_user_context 失败: group=%s sender_id=%s err=%s", group_id, sender_id, e)
         return None
 
 
 def list_user_memory(group_id: str, sender_id: str) -> list[dict]:
-    """返回用户所有记忆条目，供 query_user_memory skill 使用"""
-    try:
-        with SessionLocal() as db:
-            repo = UserMemoryRepository(db)
-            return repo.get_by_user(group_id, sender_id)
-    except Exception as e:
-        LOG.error("list_user_memory 失败: group=%s sender_id=%s err=%s", group_id, sender_id, e)
-        return []
+    """返回用户所有记忆条目，供 query_user_memory skill 和 tl-admin 使用；查询失败抛异常，别当成没有记忆"""
+    with SessionLocal() as db:
+        return UserMemoryRepository(db).get_by_user(group_id, sender_id)
 
 
 def describe_user_memory(group_id: str, sender_id: str) -> list[dict]:
@@ -85,7 +81,7 @@ def upsert_user_memory(group_id: str, sender_id: str, facts: list[dict], source:
         source:   来源标记
 
     Returns:
-        成功写入的条数
+        成功写入的条数；写库失败的条目不算（日志在 repository 里）
     """
     if not facts:
         return 0
@@ -101,7 +97,10 @@ def upsert_user_memory(group_id: str, sender_id: str, facts: list[dict], source:
                     if repo.upsert(group_id, sender_id, key, value, source):
                         success_count += 1
     except Exception as e:
-        LOG.error("upsert_user_memory 失败: %s", e)
+        LOG.exception("upsert_user_memory 失败: group=%s sender_id=%s err=%s", group_id, sender_id, e)
 
-    LOG.info("写入记忆 %d 条: group=%s sender_id=%s", success_count, group_id, sender_id)
+    if success_count < len(facts):
+        LOG.warning("写入记忆 %d/%d 条: group=%s sender_id=%s", success_count, len(facts), group_id, sender_id)
+    else:
+        LOG.info("写入记忆 %d 条: group=%s sender_id=%s", success_count, group_id, sender_id)
     return success_count

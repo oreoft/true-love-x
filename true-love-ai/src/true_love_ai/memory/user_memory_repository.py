@@ -21,7 +21,7 @@ ALLOWED_CATEGORIES = {
 SPECIAL_KEYS = {"timezone"}
 
 
-def _validate_key(key: str) -> bool:
+def is_valid_key(key: str) -> bool:
     if key in SPECIAL_KEYS:
         return True
     category = key.split(".")[0]
@@ -35,7 +35,7 @@ class UserMemoryRepository:
         self.session = session
 
     def upsert(self, group_id: str, sender_id: str, key: str, value: str, source: str = None) -> bool:
-        if not _validate_key(key):
+        if not is_valid_key(key):
             LOG.warning("非法 memory key, 已忽略: %s", key)
             return False
 
@@ -57,26 +57,23 @@ class UserMemoryRepository:
             return True
         except Exception as e:
             self.session.rollback()
-            LOG.error("upsert memory 失败: %s", e)
+            LOG.exception("upsert memory 失败: group=%s sender_id=%s key=%s err=%s", group_id, sender_id, key, e)
             return False
 
     def get_by_user(self, group_id: str, sender_id: str) -> list[dict]:
-        try:
-            rows = (
-                self.session.query(UserMemory)
-                .filter(UserMemory.group_id == group_id, UserMemory.sender_id == sender_id)
-                .order_by(UserMemory.updated_at.desc())
-                .all()
-            )
-            return [
-                {
-                    "key": r.key,
-                    "value": r.value,
-                    "source": r.source,
-                    "updated_at": r.updated_at.strftime("%Y-%m-%d") if r.updated_at else None,
-                }
-                for r in rows
-            ]
-        except Exception as e:
-            LOG.error("get_by_user 失败: group=%s sender_id=%s err=%s", group_id, sender_id, e)
-            return []
+        """查询失败直接抛异常，调用方决定是当没有还是报失败"""
+        rows = (
+            self.session.query(UserMemory)
+            .filter(UserMemory.group_id == group_id, UserMemory.sender_id == sender_id)
+            .order_by(UserMemory.updated_at.desc())
+            .all()
+        )
+        return [
+            {
+                "key": r.key,
+                "value": r.value,
+                "source": r.source,
+                "updated_at": r.updated_at.strftime("%Y-%m-%d") if r.updated_at else None,
+            }
+            for r in rows
+        ]

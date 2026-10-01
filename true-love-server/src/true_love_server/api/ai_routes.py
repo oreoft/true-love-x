@@ -230,5 +230,7 @@ async def action_run_job(request: dict):
         started = task_service.run_by_job_name(bot.bot_id, job_name)
     except ValueError as e:
         raise ValidationException(str(e))
+    if not started:
+        raise ValidationException(f"这个机器人没有 {job_name} 的定时任务，没有可执行的")
     LOG.info("action/job/run: bot_id=%s job=%s tasks=%s", bot.bot_id, job_name, started)
     return ApiResponse(data={"job_name": job_name, "status": "triggered", "tasks": len(started)})

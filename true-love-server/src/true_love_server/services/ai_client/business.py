@@ -34,5 +34,5 @@ def fetch_data(path: str, params: dict = None) -> str:
         resp.raise_for_status()
         return (resp.data or {}).get("data", {}).get("text", "")
     except Exception as e:
-        LOG.error("fetch_data %s 失败: %s", path, e)
+        LOG.warning("fetch_data %s 失败: %s", path, e)
         return ""

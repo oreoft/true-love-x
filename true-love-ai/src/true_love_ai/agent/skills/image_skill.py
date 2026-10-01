@@ -2,7 +2,7 @@
 """图像生成/分析 Skill（复用 AI 现有 image_service）"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("ImageSkill")
 
@@ -54,27 +54,23 @@ async def generate_image(params: dict, ctx: dict) -> str:
     if not prompt:
         return "诶嘿~请告诉我你想要什么样的图片哦~"
 
+    from true_love_ai.services.image_service import ImageService, GEN_IMG_DIR
+    from true_love_ai.agent.server_client import send_file
+    import base64
+    import uuid
+
     try:
-        from true_love_ai.services.image_service import ImageService, GEN_IMG_DIR
-        from true_love_ai.agent.server_client import send_file
-        import base64
-        import uuid
-
         result = await ImageService().generate_image(image_prompt=prompt, provider=provider)
-
-        if result and result.img:
-            filename = f"{uuid.uuid4().hex}.jpg"
-            (GEN_IMG_DIR / filename).write_bytes(base64.b64decode(result.img))
-            ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}")
-            if ok:
-                return SENT_TEXT
-            LOG.error("generate_image: send_file 返回失败 filename=%s", filename)
-            return SEND_FAILED_TEXT
-
-        return "呜呜~图片生成失败了捏，稍后再试试吧~"
     except Exception as e:
-        LOG.error("generate_image error: %s", e)
-        return f"呜呜~图片生成出错了捏：{e}"
+        raise SkillFailed(f"呜呜~图片生成出错了捏：{e}") from e
+    if not result or not result.img:
+        raise SkillFailed("呜呜~图片生成失败了捏，稍后再试试吧~")
+
+    filename = f"{uuid.uuid4().hex}.jpg"
+    (GEN_IMG_DIR / filename).write_bytes(base64.b64decode(result.img))
+    if not await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}"):
+        raise SkillFailed(SEND_FAILED_TEXT)
+    return SENT_TEXT
 
 
 @register_skill({
@@ -114,23 +110,24 @@ async def analyze_image(params: dict, ctx: dict) -> str:
     if not image_path:
         return "诶嘿~请提供图片路径哦~"
 
-    try:
-        import base64
-        from true_love_ai.agent.server_client import fetch_media_bytes
-        data = await fetch_media_bytes(image_path)
-        if not data:
-            return "呜呜~图片获取失败了捏，可能文件不存在~"
-        img_data = base64.b64encode(data).decode()
+    import base64
+    from true_love_ai.agent.server_client import fetch_media_bytes
+    data = await fetch_media_bytes(image_path)
+    if not data:
+        raise SkillFailed("呜呜~图片获取失败了捏，可能文件不存在~")
+    img_data = base64.b64encode(data).decode()
 
-        from true_love_ai.services.image_service import ImageService
+    from true_love_ai.services.image_service import ImageService
+    try:
         result = await ImageService().analyze_image(
             content=question,
             img_data=img_data,
         )
-        return result or "呜呜~图片分析失败了捏~"
     except Exception as e:
-        LOG.error("analyze_image error: %s", e)
-        return f"呜呜~图片分析出错了捏：{e}"
+        raise SkillFailed(f"呜呜~图片分析出错了捏：{e}") from e
+    if not result:
+        raise SkillFailed("呜呜~图片分析失败了捏~")
+    return result
 
 
 @register_skill({
@@ -171,48 +168,43 @@ async def edit_image(params: dict, ctx: dict) -> str:
     if not image_path or not prompt:
         return "诶嘿~请提供图片路径和修改要求哦~"
 
+    import base64
+    import uuid
+    from true_love_ai.agent.server_client import fetch_media_bytes, send_file
+    from true_love_ai.core.model_registry import get_model_registry
+    from true_love_ai.llm.router import get_openai_client
+    from true_love_ai.services.image_service import GEN_IMG_DIR
+
+    data = await fetch_media_bytes(image_path)
+    if not data:
+        raise SkillFailed("呜呜~图片获取失败了捏，可能文件不存在~")
+    model = get_model_registry().get("image_edit", "default")
+    LOG.info("edit_image: fetched %d bytes,  model=%s", len(data), model)
+
     try:
-        import base64
-        import uuid
-        from true_love_ai.agent.server_client import fetch_media_bytes, send_file
-        from true_love_ai.core.model_registry import get_model_registry
-        from true_love_ai.llm.router import get_openai_client
-        from true_love_ai.services.image_service import GEN_IMG_DIR
-
-        data = await fetch_media_bytes(image_path)
-        if not data:
-            return "呜呜~图片获取失败了捏，可能文件不存在~"
-        model = get_model_registry().get("image_edit", "default")
-        LOG.info("edit_image: fetched %d bytes,  model=%s", len(data), model)
-        client = get_openai_client()
-
-        response = await client.images.edit(
+        response = await get_openai_client().images.edit(
             model=model,
             image=("image.jpg", data, "image/jpeg"),
             prompt=prompt,
         )
-
-        item = response.data[0] if response.data else None
-        if not item:
-            return "呜呜~图片生成失败了捏~"
-
-        img_bytes = base64.b64decode(item.b64_json) if item.b64_json else None
-        if not img_bytes and item.url:
-            from true_love_common.http.client import async_get
-            r = await async_get(item.url, timeout=60.0)
-            img_bytes = r.content if r.ok else None
-
-        if not img_bytes:
-            return "呜呜~图片生成失败了捏~"
-
-        filename = f"{uuid.uuid4().hex}.jpg"
-        (GEN_IMG_DIR / filename).write_bytes(img_bytes)
-        ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}")
-        if ok:
-            return SENT_TEXT
-        LOG.error("edit_image: send_file 返回失败 filename=%s", filename)
-        return SEND_FAILED_TEXT
-
     except Exception as e:
-        LOG.error("edit_image error: %s", e)
-        return f"呜呜~图生图出错了捏：{e}"
+        raise SkillFailed(f"呜呜~图生图出错了捏：{e}") from e
+
+    item = response.data[0] if response.data else None
+    if not item:
+        raise SkillFailed("呜呜~图片生成失败了捏~")
+
+    img_bytes = base64.b64decode(item.b64_json) if item.b64_json else None
+    if not img_bytes and item.url:
+        from true_love_common.http.client import async_get
+        r = await async_get(item.url, timeout=60.0)
+        img_bytes = r.content if r.ok else None
+
+    if not img_bytes:
+        raise SkillFailed("呜呜~图片生成失败了捏~")
+
+    filename = f"{uuid.uuid4().hex}.jpg"
+    (GEN_IMG_DIR / filename).write_bytes(img_bytes)
+    if not await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}"):
+        raise SkillFailed(SEND_FAILED_TEXT)
+    return SENT_TEXT

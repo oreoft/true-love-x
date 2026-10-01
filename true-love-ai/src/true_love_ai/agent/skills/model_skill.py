@@ -2,7 +2,7 @@
 """模型管理 Skill（管理员专用）"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 from true_love_ai.core.model_registry import CATEGORIES
 
 LOG = logging.getLogger("ModelSkill")
@@ -76,7 +76,7 @@ async def set_model(params: dict, ctx: dict) -> str:
         LOG.info("模型已更新: %s.%s: %s → %s", category, key, old, value)
         return f"好的，已将 {category}.{key} 从 {old} 更新为 {value}，已保存。"
     except ValueError as e:
+        # 类别或模型名不对，原因在话里
         return f"更新失败: {e}"
     except Exception as e:
-        LOG.error("set_model 失败: %s", e)
-        return f"更新失败: {e}"
+        raise SkillFailed(f"更新失败: {e}") from e

@@ -8,35 +8,68 @@ AI 回调接口（有 token）和 tl-admin（无 token）共用此模块。
 import asyncio
 import logging
 import time
+from datetime import datetime, timedelta, timezone
 
 from .scheduler_service import get_job, get_jobs, scheduler
 
 LOG = logging.getLogger("ReminderService")
 
 ID_PREFIX = "reminder_"
+# 发送失败后隔多久重试，只重试一次
+RETRY_DELAY = timedelta(minutes=5)
+RETRY_SUFFIX = "_retry"
 
 
-def _send_reminder(receiver: str, at_user: str, content: str, job_id: str, bot_id: str) -> None:
+def _send_reminder(receiver: str, at_user: str, content: str, job_id: str, bot_id: str,
+                   retried: bool = False) -> None:
     """APScheduler 触发函数（模块级，SQLAlchemy jobstore 要求可序列化）"""
+    from ..services import base_client
     LOG.info("提醒触发: job_id=%s, bot_id=%s, receiver=%s", job_id, bot_id, receiver)
     try:
-        from ..services import base_client
         success, msg = asyncio.run(base_client.send_text(
             bot_id,
             receiver,
             at_user,
             f"⏰ 【提醒功能】：\n\n{content}",
         ))
-        if not success:
-            LOG.error("提醒发送失败: %s", msg)
     except Exception as exc:
-        LOG.exception("提醒触发异常: %s", exc)
+        LOG.exception("提醒发送异常: job_id=%s bot_id=%s receiver=%s", job_id, bot_id, receiver)
+        success, msg = False, str(exc)
+    if success:
+        return
+
+    LOG.error("提醒发送失败: job_id=%s bot_id=%s receiver=%s retried=%s err=%s", job_id, bot_id, receiver, retried, msg)
+    if retried:
+        notice = f"提醒发给 {receiver} 失败，重试也没成功：{msg}\n内容：{content}"
+    else:
+        notice = f"提醒发给 {receiver} 失败，{int(RETRY_DELAY.total_seconds() // 60)} 分钟后重试一次：{msg}"
+        _schedule_retry(receiver, at_user, content, job_id, bot_id)
+    ok, err = asyncio.run(base_client.send_to_master(bot_id, notice))
+    if not ok:
+        LOG.warning("提醒失败的通知没发给管理员: job_id=%s bot_id=%s err=%s", job_id, bot_id, err)
+
+
+def _schedule_retry(receiver: str, at_user: str, content: str, job_id: str, bot_id: str) -> None:
+    """另起一个 date 任务重试；用新的 id，免得和调度器删除原任务撞上，前缀不变，AI 和后台照样查得到"""
+    retry_id = job_id if job_id.endswith(RETRY_SUFFIX) else f"{job_id}{RETRY_SUFFIX}"
+    try:
+        scheduler.add_job(
+            _send_reminder,
+            'date',
+            run_date=datetime.now(timezone.utc) + RETRY_DELAY,
+            id=retry_id,
+            jobstore=bot_id,
+            replace_existing=True,
+            kwargs={"receiver": receiver, "at_user": at_user, "content": content,
+                    "job_id": retry_id, "bot_id": bot_id, "retried": True},
+        )
+    except Exception:
+        LOG.exception("提醒重试任务添加失败: job_id=%s bot_id=%s", job_id, bot_id)
 
 
 def _parse_future_dt(iso_str: str):
     """解析 ISO-8601 时间字符串，校验必须是未来时间，返回 datetime 对象。"""
     import dateutil.parser
-    from datetime import datetime
     dt = dateutil.parser.isoparse(iso_str)
     now = datetime.now(dt.tzinfo)
     if dt <= now:

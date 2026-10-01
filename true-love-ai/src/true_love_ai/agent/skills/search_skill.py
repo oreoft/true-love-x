@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """搜索增强 Skill（通过百度搜索获取实时信息）"""
+import asyncio
 import json
 import logging
 import subprocess
+from typing import Optional
 from urllib.parse import quote_plus
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("SearchSkill")
 
@@ -42,17 +44,16 @@ async def web_search(params: dict, ctx: dict) -> str:
     if not query:
         return "诶嘿~请提供搜索关键词哦~"
 
-    try:
-        results = fetch_baidu_references(query)
-        if not results:
-            return f"搜索「{query}」没有找到相关结果"
-        return f"搜索「{query}」的结果：\n{json.dumps(results[:5], ensure_ascii=False, indent=2)}"
-    except Exception as e:
-        LOG.error("web_search error: %s", e)
-        return "呜呜~搜索失败了捏，稍后再试试吧~"
+    # curl 是阻塞调用，放到线程里跑，不卡事件循环
+    results = await asyncio.to_thread(fetch_baidu_references, query)
+    if results is None:
+        raise SkillFailed("呜呜~搜索失败了捏，稍后再试试吧~")
+    if not results:
+        return f"搜索「{query}」没有找到相关结果"
+    return f"搜索「{query}」的结果：\n{json.dumps(results[:5], ensure_ascii=False, indent=2)}"
 
 
-def fetch_baidu_references(keyword: str) -> list[dict]:
+def fetch_baidu_references(keyword: str) -> Optional[list[dict]]:
     """
     通过百度搜索获取参考信息
 
@@ -62,13 +63,11 @@ def fetch_baidu_references(keyword: str) -> list[dict]:
         keyword: 搜索关键词
 
     Returns:
-        参考信息列表，每项包含 content 和 source_url
+        参考信息列表，每项包含 content 和 source_url；搜索本身失败（超时、curl 报错、响应解析不了）返回 None
     """
-    reference_list = []
+    send_curl = BAIDU_SEARCH_CURL % quote_plus(keyword)
+    LOG.info("百度搜索: %s", keyword)
     try:
-        send_curl = BAIDU_SEARCH_CURL % quote_plus(keyword)
-        LOG.info(f"百度搜索: {keyword}")
-
         baidu_response = subprocess.run(
             send_curl,
             shell=True,
@@ -77,25 +76,25 @@ def fetch_baidu_references(keyword: str) -> list[dict]:
             text=True,
             timeout=30
         )
+    except subprocess.TimeoutExpired:
+        LOG.warning("百度搜索超时: keyword=%s", keyword)
+        return None
 
-        # 解析响应
+    if baidu_response.returncode != 0:
+        LOG.warning("百度搜索 curl 失败: keyword=%s returncode=%s stderr=%s",
+                    keyword, baidu_response.returncode, (baidu_response.stderr or "")[:200])
+        return None
+
+    try:
         data = json.loads(baidu_response.stdout)
-
-        # 提取搜索结果
         reference_list = [
             {"content": entry['abs'], "source_url": entry['url']}
             for entry in data['feed']['entry']
             if 'abs' in entry and 'url' in entry
         ]
+    except (ValueError, KeyError, TypeError) as e:
+        LOG.warning("百度搜索响应解析失败: keyword=%s err=%r body=%s", keyword, e, baidu_response.stdout[:200])
+        return None
 
-        LOG.info(f"百度搜索结果数量: {len(reference_list)}")
-
-    except subprocess.TimeoutExpired:
-        LOG.error(f"百度搜索超时, keyword: {keyword}")
-    except json.JSONDecodeError as e:
-        LOG.error(f"百度搜索响应解析失败: {e}")
-    except Exception:
-        LOG.exception(f"百度搜索失败, keyword: {keyword}")
-
+    LOG.info("百度搜索结果数量: %d", len(reference_list))
     return reference_list
-

@@ -13,7 +13,7 @@ from true_love_ai.core.config import get_config
 from true_love_ai.core.model_registry import get_model_registry
 from true_love_ai.models.response import AudioResponse
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("AudioService")
 
 GEN_AUDIO_DIR = Path("gen_audio")
 GEN_AUDIO_DIR.mkdir(exist_ok=True)
@@ -40,7 +40,7 @@ class AudioService:
             return await self._generate_by_model(text, text_input, default_model, voice)
         except Exception as e:
             if fallback_model:
-                LOG.warning("主力语音合成失败，降级备用模型 %s: %s", fallback_model, e)
+                LOG.warning("主力语音合成失败，降级备用模型 %s: %s", fallback_model, e, exc_info=True)
                 return await self._generate_by_model(text, text_input, fallback_model, voice)
             raise
 

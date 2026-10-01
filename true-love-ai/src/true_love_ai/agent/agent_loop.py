@@ -136,6 +136,8 @@ class AgentLoop:
             # 只告诉这一次调用，不写进会话历史
             messages = [*messages, {"role": "user", "content": AUTO_REPLY_RULE}]
         last_tool_result = ""
+        # 失败了的技能，有的话结局记成 tool_failed
+        failed_tools: list[str] = []
 
         for iteration in range(MAX_TOOL_ITERATIONS):
             try:
@@ -148,7 +150,7 @@ class AgentLoop:
                 return Ending(Outcome.LLM_ERROR, detail=repr(e)[:200]), session
 
             if result_type == "text":
-                return outcome.from_model_reply(result, last_tool_result, auto), session
+                return outcome.from_model_reply(result, last_tool_result, auto, failed_tools), session
 
             # result_type == "tool_calls"
             tool_calls = result
@@ -177,8 +179,10 @@ class AgentLoop:
                                    bot_id, notify=notify)
                 for tc in tool_calls
             ])
-            for tc, tool_result in zip(tool_calls, tool_results):
+            for tc, (tool_result, failed) in zip(tool_calls, tool_results):
                 last_tool_result = tool_result
+                if failed:
+                    failed_tools.append(tc["name"])
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
@@ -200,9 +204,11 @@ class AgentLoop:
             if session is not None:
                 session.add_message("assistant", text)
             receiver, at_user, reply_msg_id = _route(msg)
-            await self._send_reply(receiver, text, at_user, reply_msg_id)
+            sent = await self._send_reply(receiver, text, at_user, reply_msg_id)
+        else:
+            sent = False
         outcome.log_outcome(ending, bot_id=msg.bot_id, chat_id=msg.chat_id, sender_id=msg.sender_id,
-                            msg_type=msg.msg_type, auto=auto, sent=bool(text))
+                            msg_type=msg.msg_type, auto=auto, sent=bool(sent))
 
     def _build_user_content(self, msg: ChatMsg) -> Optional[str]:
         """把各类消息类型转换为 LLM 可理解的文本"""
@@ -285,10 +291,13 @@ class AgentLoop:
             platform: str,
             bot_id: str,
             notify: bool = True,
-    ) -> str:
-        """执行单个 tool，返回结果字符串；notify 为 False 时不发技能的预通知"""
+    ) -> tuple[str, bool]:
+        """执行单个 tool，返回 (回给模型的结果, 是否失败)；notify 为 False 时不发技能的预通知"""
         name = tool_call["name"]
         args = tool_call["arguments"]
+        if tool_call.get("arguments_error"):
+            # 参数都没解析出来，不执行，让模型改好参数再调（router 已记日志）
+            return f"[参数错误] 技能 {name} 没有执行：{tool_call['arguments_error']}，请按参数说明重新调用", False
         LOG.info("执行 tool: %s, args=%s", name, str(args)[:200])
 
         ctx = {
@@ -310,33 +319,40 @@ class AgentLoop:
                 import random
                 from true_love_ai.agent.server_client import send_text
                 msg = random.choice(notify_msg) if isinstance(notify_msg, list) else notify_msg
-                await send_text(receiver, msg, at_user)
+                if not await send_text(receiver, msg, at_user):
+                    LOG.warning("tool %s 的预通知没发出去: receiver=%s", name, receiver)
 
             result = await asyncio.wait_for(
                 skill_registry.execute(name, args, ctx),
                 timeout=SKILL_TIMEOUT_SECONDS,
             )
             LOG.info("tool %s 执行结果: %s", name, str(result)[:200])
-            return str(result)
+            return str(result), False
         except asyncio.TimeoutError:
             LOG.error("tool %s 执行超时 (%ds)", name, SKILL_TIMEOUT_SECONDS)
-            return f"[执行超时] 技能 {name} 处理时间过长，请稍后重试"
+            return f"[执行超时] 技能 {name} 处理时间过长，请稍后重试", True
+        except skill_registry.SkillFailed as e:
+            # 包了原异常的带上堆栈；技能自己判定的失败（比如发送接口返回失败）原因已经在话里了
+            LOG.error("tool %s 失败: %s", name, e, exc_info=e.__cause__ is not None)
+            return str(e), True
         except Exception as e:
             from true_love_ai.agent.skills.permission import PermissionDenied
             if isinstance(e, PermissionDenied):
-                return str(e)
+                return str(e), False
             LOG.exception("tool %s 执行异常: %s", name, e)
-            return f"[执行失败] {e}"
+            return f"[执行失败] {e}", True
 
-    async def _send_reply(self, receiver: str, content: str, at_user: str, reply_msg_id: str = "") -> None:
-        """通过 Server 发送最终回复"""
+    async def _send_reply(self, receiver: str, content: str, at_user: str, reply_msg_id: str = "") -> bool:
+        """通过 Server 发送最终回复，返回是否发出去了"""
         from true_love_ai.agent.server_client import send_text
         try:
             ok = await send_text(receiver, content, at_user, reply_msg_id)
             if not ok:
                 LOG.error("发送回复失败: receiver=%s", receiver)
+            return ok
         except Exception as e:
             LOG.exception("发送回复异常: %s", e)
+            return False
 
     @staticmethod
     def _extract_first_link(text: str) -> Optional[str]:

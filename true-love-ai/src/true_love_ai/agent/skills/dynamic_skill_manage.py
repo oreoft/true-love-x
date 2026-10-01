@@ -11,7 +11,7 @@ import json
 import logging
 import re
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 from true_love_ai.agent.skills.permission import DENIED_TEXT, check_permission
 from true_love_ai.memory import dynamic_skill_service as _ss
 from true_love_ai.memory import skill_access_service
@@ -94,8 +94,12 @@ async def skill_save(params: dict, ctx: dict) -> str:
     try:
         result = _ss.save_skill(skill_id, name, description, command, param_defs, creator,
                                 default_points=skill_access_service.install_points(ctx))
-    except (ValueError, RuntimeError) as e:
+    except ValueError as e:
+        # 参数校验没过，原因回给模型
         return str(e)
+    except RuntimeError as e:
+        # 写库失败，堆栈在 repository 里记了
+        raise SkillFailed(str(e)) from e
 
     action = "更新" if result["is_update"] else "保存"
     LOG.info("dynamic skill %s: id=%s creator=%s", action, skill_id, creator)
@@ -167,15 +171,18 @@ async def skill_run(params: dict, ctx: dict) -> str:
             timeout=5,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_EXEC_TIMEOUT)
-    except asyncio.TimeoutError:
-        return f"技能「{skill['name']}」执行超时（>{_EXEC_TIMEOUT}s）"
+    except asyncio.TimeoutError as e:
+        raise SkillFailed(f"技能「{skill['name']}」执行超时（>{_EXEC_TIMEOUT}s）") from e
     except Exception as e:
-        LOG.exception("skill_run 执行异常: id=%s err=%s", skill_id, e)
-        return f"执行失败：{e}"
+        raise SkillFailed(f"执行失败：{e}") from e
+
+    output = stdout.decode("utf-8", errors="replace").strip()
+    if proc.returncode != 0:
+        # 命令失败不计使用次数，把输出带给模型说明原因（AgentLoop 记日志）
+        raise SkillFailed(f"技能「{skill['name']}」执行失败（退出码 {proc.returncode}）：{output[:_OUTPUT_LIMIT]}")
 
     _ss.increment_skill_usage(skill_id)
 
-    output = stdout.decode("utf-8", errors="replace").strip()
     if not output:
         return f"技能「{skill['name']}」执行完成，无输出"
     if len(output) > _OUTPUT_LIMIT:

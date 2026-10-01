@@ -46,6 +46,11 @@ class ListenManagerTests(ServerCase):
         answer = {"code": 0 if success else 107, "message": "ok" if success else "listener was not running"}
         self.bases.reply(f"{self.callback}/execute/wx", answer)
         self.bases.reply(f"{self.callback}/listen/add", {**answer, "data": {"success": success}})
+        if not success:
+            self.bases.reply(f"{self.callback}/listen/status", {"code": 102, "message": "WeChat offline"})
+
+    def base_still_listens(self, reason=None):
+        self.bases.reply(f"{self.callback}/listen/status", {"code": 0, "data": {"results": {"deleted chat": reason}}})
 
     def test_chat_is_saved_only_after_base_starts_listening(self):
         self.base_answers(False)
@@ -66,26 +71,81 @@ class ListenManagerTests(ServerCase):
             self.assertFalse(self.run_async(self.manager.reset_listener("kept chat"))["success"])
         self.assertFalse(listen_store.exists("wxid_m8s", "new chat"))
 
-    def test_removal_is_saved_whether_or_not_base_was_listening(self):
-        for success in (True, False):
-            with self.subTest(base_success=success):
-                listen_store.add("wxid_m8s", "deleted chat")
-                self.base_answers(success)
+    def test_removal_is_saved_once_base_stops_listening(self):
+        self.base_answers(True)
 
-                result = self.run_async(self.manager.remove_listen("deleted chat"))
+        result = self.run_async(self.manager.remove_listen("deleted chat"))
 
-                self.assertTrue(result["success"])
-                self.assertEqual(listen_store.list_all("wxid_m8s"), ["kept chat"])
+        self.assertTrue(result["success"])
+        self.assertEqual(listen_store.list_all("wxid_m8s"), ["kept chat"])
         self.assertEqual(self.bases.sent()[-1],
                          (f"{self.callback}/execute/wx", {"name": "RemoveListenChat", "params": {"nickname": "deleted chat"}}))
+
+    def test_failed_removal_keeps_the_chat_in_the_list(self):
+        sdk_failure = {"code": 0, "message": "success",
+                       "data": {"status": "失败", "message": "not listening", "data": None}}
+        cases = (("base error, still listening", {"code": 107, "message": "Execution failed"}, None),
+                 ("SDK failure, window gone", sdk_failure, "window_not_found"))
+        for name, answer, reason in cases:
+            with self.subTest(name):
+                self.bases.reply(f"{self.callback}/execute/wx", answer)
+                self.base_still_listens(reason)
+
+                with self.assertLogs("ListenManager", level="WARNING"):
+                    result = self.run_async(self.manager.remove_listen("deleted chat"))
+
+                self.assertFalse(result["success"])
+                self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat"])
 
     def test_reset_keeps_the_saved_chat(self):
         self.base_answers(False)
 
         result = self.run_async(self.manager.remove_listen("deleted chat", skip_store=True))
 
+        self.assertFalse(result["success"])
+        self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat"])
+
+    def test_removal_is_saved_when_base_was_not_listening_anyway(self):
+        self.bases.reply(f"{self.callback}/execute/wx",
+                         {"code": 0, "data": {"status": "失败", "message": "not listening", "data": None}})
+        self.base_still_listens("not_listening")
+
+        with self.assertLogs("ListenManager", level="INFO") as logs:
+            result = self.run_async(self.manager.remove_listen("deleted chat"))
+
+        self.assertTrue(result["success"])
+        self.assertEqual(listen_store.list_all("wxid_m8s"), ["kept chat"])
+        self.assertTrue(any("not being listened" in line for line in logs.output))
+        self.assertEqual(self.bases.sent()[-1], (f"{self.callback}/listen/status", {"chat_names": ["deleted chat"]}))
+
+    def test_reset_adds_the_listen_again_when_base_was_not_listening(self):
+        self.base_answers(True)
+        self.bases.reply(f"{self.callback}/execute/wx",
+                         {"code": 0, "data": {"status": "失败", "message": "not listening", "data": None}})
+
+        result = self.run_async(self.manager.reset_listener("kept chat"))
+
         self.assertTrue(result["success"])
         self.assertEqual(listen_store.list_all("wxid_m8s"), ["deleted chat", "kept chat"])
+
+    def test_reset_adds_the_listen_again_even_when_removal_failed(self):
+        self.base_answers(True)
+        self.bases.reply(f"{self.callback}/execute/wx", {"code": 107, "message": "Execution failed"})
+        self.bases.reply(f"{self.callback}/listen/status", {"code": 102, "message": "WeChat offline"})
+
+        with self.assertLogs("ListenManager", level="WARNING"):
+            result = self.run_async(self.manager.reset_listener("kept chat"))
+
+        self.assertTrue(result["success"])
+
+    def test_failed_reset_reports_why_removal_failed_too(self):
+        self.base_answers(False)
+
+        with self.assertLogs("ListenManager", level="ERROR"):
+            result = self.run_async(self.manager.reset_listener("kept chat"))
+
+        self.assertFalse(result["success"])
+        self.assertIn("listener was not running", result["message"])
 
     def test_reset_removes_the_listen_and_adds_it_again(self):
         self.base_answers(True)

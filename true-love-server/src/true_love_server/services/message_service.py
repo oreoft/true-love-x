@@ -24,8 +24,8 @@ LOG = logging.getLogger("MessageService")
 AI_UNAVAILABLE_REPLY = "啊哦~AI酱 暂时连不上，稍后再试试捏~"
 
 
-async def handle_incoming(bot: BotRecord, msg: ChatMsg) -> None:
-    """存储消息（best-effort）并按需触发 AI，两个逻辑互相独立"""
+async def handle_incoming(bot: BotRecord, msg: ChatMsg, archive_only: bool = False) -> None:
+    """存储消息（best-effort）并按需触发 AI，两个逻辑互相独立；archive_only 的只存档"""
     # 消息属于报上来的这个机器人，不信消息体里的 bot_id
     msg.bot_id = bot.bot_id
     is_new = await asyncio.to_thread(_save_message, bot.bot_id, msg)
@@ -33,8 +33,14 @@ async def handle_incoming(bot: BotRecord, msg: ChatMsg) -> None:
         LOG.warning("重复消息已过滤，跳过 AI 触发: bot_id=%s msg_hash=%s sender_id=%s",
                     bot.bot_id, msg.msg_hash, msg.sender_id)
         return
+    if archive_only:
+        LOG.info("补发的消息只存档，不交给 AI: bot_id=%s msg_hash=%s", bot.bot_id, msg.msg_hash)
+        return
 
-    if msg.is_at_me or not msg.is_group or await asyncio.to_thread(_auto_ai, bot.bot_id, msg):
+    # 判断要不要交给 AI、限额、限流、交给 AI 整段出错都按 AI 没接住处理，回一句免得用户以为机器人假死
+    try:
+        if not (msg.is_at_me or not msg.is_group or await asyncio.to_thread(_auto_ai, bot.bot_id, msg)):
+            return
         limit = await asyncio.to_thread(bot_settings.get_limit, bot.bot_id, bot_settings.AI_RATE_LIMIT)
         decision = ai_rate_limit.check(bot.bot_id, msg.chat_id, msg.sender_id,
                                        limit=limit["count"], seconds=limit["seconds"])
@@ -43,11 +49,10 @@ async def handle_incoming(bot: BotRecord, msg: ChatMsg) -> None:
             if decision == ai_rate_limit.NOTIFY:
                 await _reply(bot, msg, ai_rate_limit.BUSY_REPLY)
             return
-        try:
-            await asyncio.to_thread(_trigger_ai, bot, msg)
-        except Exception as e:
-            LOG.error(f"触发 AI 失败: {e}", exc_info=True)
-            await _send_ai_unavailable(bot, msg)
+        await asyncio.to_thread(_trigger_ai, bot, msg)
+    except Exception:
+        LOG.exception("交给 AI 失败: bot_id=%s chat=%s sender_id=%s", bot.bot_id, msg.chat_id, msg.sender_id)
+        await _send_ai_unavailable(bot, msg)
 
 
 def _auto_ai(bot_id: str, msg: ChatMsg) -> bool:
@@ -85,8 +90,8 @@ def _save_message(bot_id: str, msg: ChatMsg) -> bool:
     try:
         with bot_session(bot_id) as db:
             return GroupMessageRepository(db).save(msg)
-    except Exception as e:
-        LOG.error(f"消息存储失败: {e}", exc_info=True)
+    except Exception:
+        LOG.exception("消息存储失败: bot_id=%s msg_hash=%s", bot_id, msg.msg_hash)
         return True
 
 

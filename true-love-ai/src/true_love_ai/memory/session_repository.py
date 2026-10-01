@@ -33,7 +33,7 @@ class SessionRepository:
                     messages.append({"role": row.role, "content": row.content})
             return summary, messages
         except Exception as e:
-            LOG.error("load session failed: session=%s err=%s", session_id, e)
+            LOG.exception("load session failed: session=%s err=%s", session_id, e)
             return None, []
 
     def count_messages(self, session_id: str) -> int:
@@ -45,7 +45,7 @@ class SessionRepository:
                     .count()
                 )
         except Exception as e:
-            LOG.error("count_messages failed: session=%s err=%s", session_id, e)
+            LOG.exception("count_messages failed: session=%s err=%s", session_id, e)
             return 0
 
     def append_message(self, session_id: str, role: str, content: str) -> None:
@@ -60,41 +60,38 @@ class SessionRepository:
                 ))
                 db.commit()
         except Exception as e:
-            LOG.error("append_message failed: session=%s err=%s", session_id, e)
+            LOG.exception("append_message failed: session=%s err=%s", session_id, e)
 
     def compress(self, session_id: str, new_summary: str, keep_count: int) -> None:
-        """删除旧 msg 行（保留最近 keep_count 条），upsert summary 行"""
-        try:
-            with SessionLocal() as db:
-                msg_rows = (
-                    db.query(SessionMessage)
-                    .filter(SessionMessage.session_id == session_id, SessionMessage.type == 'msg')
-                    .order_by(SessionMessage.id)
-                    .all()
-                )
-                to_delete = msg_rows[:-keep_count] if len(msg_rows) > keep_count else []
-                for row in to_delete:
-                    db.delete(row)
+        """删除旧 msg 行（保留最近 keep_count 条），upsert summary 行；失败抛异常，由压缩流程记日志并进入冷却"""
+        with SessionLocal() as db:
+            msg_rows = (
+                db.query(SessionMessage)
+                .filter(SessionMessage.session_id == session_id, SessionMessage.type == 'msg')
+                .order_by(SessionMessage.id)
+                .all()
+            )
+            to_delete = msg_rows[:-keep_count] if len(msg_rows) > keep_count else []
+            for row in to_delete:
+                db.delete(row)
 
-                summary_row = (
-                    db.query(SessionMessage)
-                    .filter(SessionMessage.session_id == session_id, SessionMessage.type == 'summary')
-                    .first()
-                )
-                if summary_row:
-                    summary_row.content = new_summary
-                    summary_row.created_at = datetime.now()
-                else:
-                    db.add(SessionMessage(
-                        session_id=session_id,
-                        type='summary',
-                        role=None,
-                        content=new_summary,
-                        created_at=datetime.now(),
-                    ))
-                db.commit()
-        except Exception as e:
-            LOG.error("compress failed: session=%s err=%s", session_id, e)
+            summary_row = (
+                db.query(SessionMessage)
+                .filter(SessionMessage.session_id == session_id, SessionMessage.type == 'summary')
+                .first()
+            )
+            if summary_row:
+                summary_row.content = new_summary
+                summary_row.created_at = datetime.now()
+            else:
+                db.add(SessionMessage(
+                    session_id=session_id,
+                    type='summary',
+                    role=None,
+                    content=new_summary,
+                    created_at=datetime.now(),
+                ))
+            db.commit()
 
 
 _repo: SessionRepository | None = None

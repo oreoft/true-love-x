@@ -13,7 +13,7 @@ from .config_http import HTTPConfig, SessionConfig
 from .config_services import PlatformKeyConfig, NexuConfig
 from true_love_common.observability.logging import LoggingConfig
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("Config")
 
 
 class Config(BaseSettings):
@@ -45,7 +45,7 @@ class Config(BaseSettings):
             loki_user_id=loki_config.get("user_id", ""),
             loki_api_key=loki_config.get("api_key", ""),
         )
-        LOG.info(f"从 {path} 加载配置...")
+        LOG.info("从 %s 加载配置...", path)
         return cls(**data)
 
 

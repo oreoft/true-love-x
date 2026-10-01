@@ -2,7 +2,7 @@
 """文件分析 Skill - 把文件传给 LLM 原生分析"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("FileSkill")
 
@@ -62,24 +62,24 @@ async def read_file(params: dict, ctx: dict) -> str:
     if not mime_type:
         return f"呜呜~暂不支持该文件格式：{file_path}"
 
+    import base64
+    from true_love_ai.agent.server_client import fetch_media_bytes
+    data = await fetch_media_bytes(file_path)
+    if not data:
+        raise SkillFailed("呜呜~文件获取失败了捏，可能文件不存在~")
+
+    b64 = base64.b64encode(data).decode()
+    from true_love_ai.llm.router import get_llm_router
+    router = get_llm_router()
+
     try:
-        import base64
-        from true_love_ai.agent.server_client import fetch_media_bytes
-        data = await fetch_media_bytes(file_path)
-        if not data:
-            return "呜呜~文件获取失败了捏，可能文件不存在~"
-
-        b64 = base64.b64encode(data).decode()
-        from true_love_ai.llm.router import get_llm_router
-        router = get_llm_router()
-
         if mime_type.startswith("image/"):
             result = await router.vision(prompt=question, image_data=b64, mime_type=mime_type)
         else:
             result = await router.document(prompt=question, file_data=b64, mime_type=mime_type)
-
-        return result or "呜呜~文件分析失败了捏~"
-
     except Exception as e:
-        LOG.error("read_file error: path=%s err=%s", file_path, e)
-        return f"呜呜~文件分析出错了捏：{e}"
+        raise SkillFailed(f"呜呜~文件分析出错了捏：{e}") from e
+
+    if not result:
+        raise SkillFailed("呜呜~文件分析失败了捏~")
+    return result

@@ -18,7 +18,7 @@ from true_love_ai.services.audio_service import GEN_AUDIO_DIR
 from true_love_ai.services.image_service import GEN_IMG_DIR
 from true_love_ai.services.video_service import GEN_VIDEO_DIR
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("App")
 
 
 @asynccontextmanager

@@ -8,7 +8,7 @@ import logging
 
 from true_love_ai.llm.router import get_llm_router
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("ChatService")
 
 
 class ChatService:
@@ -54,5 +54,5 @@ class ChatService:
             LOG.info("extract_memory_facts: sender_id=%s, 提取到 %d 条", sender_id, len(facts))
             return facts
         except Exception as e:
-            LOG.warning("extract_memory_facts 失败，返回空列表: %s", e)
+            LOG.warning("extract_memory_facts 失败，返回空列表: %s", e, exc_info=True)
             return []

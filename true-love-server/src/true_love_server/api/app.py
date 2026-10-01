@@ -49,7 +49,8 @@ async def _refresh_listen_after_startup():
             continue
         try:
             result = await get_listen_manager(bot.bot_id).refresh_listen()
-            LOG.info("启动后补监听完成: bot_id=%s 共 %s 个，失败 %s 个", bot.bot_id, result["total"], result["fail_count"])
+            log = LOG.error if result["fail_count"] > 0 else LOG.info
+            log("启动后补监听完成: bot_id=%s 共 %s 个，失败 %s 个", bot.bot_id, result["total"], result["fail_count"])
         except Exception:
             LOG.exception("启动后补监听失败: bot_id=%s", bot.bot_id)
 

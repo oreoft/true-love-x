@@ -6,7 +6,10 @@ Scheduler Service - 定时任务调度服务
 调度器给每个机器人挂一个 SQLAlchemyJobStore，别名就是 bot_id，增删查任务时都要指明 jobstore。
 "立即执行"这种一次性的放内存。
 """
+import asyncio
 import logging
+import threading
+import time
 
 from apscheduler import events
 from apscheduler.executors.pool import ThreadPoolExecutor
@@ -39,20 +42,58 @@ scheduler = BackgroundScheduler(
 )
 
 
+# 同一个任务的同一类事件，这么久内只通知管理员一次，免得刷屏
+ALERT_INTERVAL = 3600
+_last_alert: dict[tuple[str, str, int], float] = {}
+_alert_lock = threading.Lock()
+
+
 def _scheduler_listener(event):
-    """调度器事件监听，用于记录详细的任务执行状态"""
+    """调度器事件监听：记录任务执行状态，失败和错过的通知管理员"""
     if event.code == events.EVENT_JOB_EXECUTED:
         LOG.info("Job [%s] in [%s] executed successfully.", event.job_id, event.jobstore)
     elif event.code == events.EVENT_JOB_ERROR:
-        LOG.error("Job [%s] in [%s] failed with exception: %s", event.job_id, event.jobstore, event.exception)
+        LOG.error("Job [%s] in [%s] failed with exception: %s\n%s",
+                  event.job_id, event.jobstore, event.exception, event.traceback)
+        _alert(event, f"定时任务 {event.job_id} 执行失败：{event.exception}")
     elif event.code == events.EVENT_JOB_MISSED:
-        LOG.warning("Job [%s] in [%s] was MISSED (scheduled run time was %s). "
-                    "It will be retried if within grace time.",
-                    event.job_id, event.jobstore, event.scheduled_run_time)
+        LOG.error("Job [%s] in [%s] was MISSED and skipped (scheduled run time was %s, beyond grace time).",
+                  event.job_id, event.jobstore, event.scheduled_run_time)
+        _alert(event, f"定时任务 {event.job_id} 错过了执行时间 {event.scheduled_run_time}，这次没有执行")
+    elif event.code == events.EVENT_JOB_MAX_INSTANCES:
+        LOG.warning("Job [%s] in [%s] skipped: too many instances already running (scheduled run time was %s).",
+                    event.job_id, event.jobstore, event.scheduled_run_times)
+
+
+def _alert(event, content: str) -> None:
+    """通知任务所属机器人的管理员；同一个任务同一类事件限频。内存里的一次性任务发给默认机器人的管理员"""
+    key = (event.jobstore, event.job_id, event.code)
+    now = time.monotonic()
+    with _alert_lock:
+        last = _last_alert.get(key)
+        if last is not None and now - last < ALERT_INTERVAL:
+            LOG.info("Alert for job [%s] in [%s] suppressed, already sent within %ss",
+                     event.job_id, event.jobstore, ALERT_INTERVAL)
+            return
+        _last_alert[key] = now
+    bot_id = "" if event.jobstore == MEMORY else event.jobstore
+    _notify_master(bot_id, content)
+
+
+def _notify_master(bot_id: str, content: str) -> None:
+    """在单独的线程里发，不占调度器和执行任务的线程"""
+    def send():
+        from . import base_client
+        ok, err = asyncio.run(base_client.send_to_master(bot_id, content))
+        if not ok:
+            LOG.warning("Job alert to master of bot [%s] failed: %s", bot_id, err)
+
+    threading.Thread(target=send, name="job-alert", daemon=True).start()
 
 
 scheduler.add_listener(_scheduler_listener,
-                       events.EVENT_JOB_EXECUTED | events.EVENT_JOB_ERROR | events.EVENT_JOB_MISSED)
+                       events.EVENT_JOB_EXECUTED | events.EVENT_JOB_ERROR | events.EVENT_JOB_MISSED
+                       | events.EVENT_JOB_MAX_INSTANCES)
 
 
 def add_bot_store(bot_id: str) -> None:

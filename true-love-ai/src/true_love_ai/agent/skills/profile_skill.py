@@ -2,7 +2,7 @@
 """用户画像管理 Skill（直接读写 AI 本地 SQLite）"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("ProfileSkill")
 
@@ -65,20 +65,23 @@ async def save_user_profile(params: dict, ctx: dict) -> str:
                 f"你发的是「{value}」，请重新告诉我正确的名称哦~"
             )
 
+    from true_love_ai.memory.user_memory_repository import is_valid_key
+    if not is_valid_key(key):
+        return f"呜呜~保存画像失败啦，键名「{key}」的类别不对，请按 category.sub_key 的格式重新给我哦~"
+
     group_id = ctx.get("session_id", "")
     sender_id = ctx.get("sender_id", "")
 
-    try:
-        from true_love_ai.memory.memory_manager import upsert_user_memory
-        upsert_user_memory(group_id, sender_id, [{"key": key, "value": value}], source="profile_skill")
-        LOG.info("用户 [%s] 保存画像: %s = %s", sender_id, key, value)
+    from true_love_ai.memory.memory_manager import upsert_user_memory
+    saved = upsert_user_memory(group_id, sender_id, [{"key": key, "value": value}], source="profile_skill")
+    if not saved:
+        # 写库失败的原因和堆栈已经在 repository 里记了
+        raise SkillFailed("呀，系统小本本卡住了，没能帮你记下来呢，稍后再试一下吧~")
+    LOG.info("用户 [%s] 保存画像: %s = %s", sender_id, key, value)
 
-        if key == "timezone":
-            return f"好的，我已经把你的时区永久设置为 {value} 啦！以后有关时间的推算都会按这个来哦~"
-        return f"好哒，已经把「{key} = {value}」永久记在数据库里啦！"
-    except Exception as e:
-        LOG.error("存入画像失败: %s", e)
-        return "呀，系统小本本卡住了，没能帮你记下来呢，稍后再试一下吧~"
+    if key == "timezone":
+        return f"好的，我已经把你的时区永久设置为 {value} 啦！以后有关时间的推算都会按这个来哦~"
+    return f"好哒，已经把「{key} = {value}」永久记在数据库里啦！"
 
 
 @register_skill({
@@ -102,18 +105,17 @@ async def query_user_memory(params: dict, ctx: dict) -> str:
     sender_id = ctx.get("sender_id", "")
     sender_name = ctx.get("sender_name", sender_id)
 
+    from true_love_ai.memory.memory_manager import list_user_memory
     try:
-        from true_love_ai.memory.memory_manager import list_user_memory
         memories = list_user_memory(group_id, sender_id)
-
-        if not memories:
-            return f"我的数据库里还没有关于你（{sender_name}）的任何记忆哦~"
-
-        lines = [f"以下是我记住的关于你（{sender_name}）的信息："]
-        for m in memories:
-            updated = m.get("updated_at") or ""
-            lines.append(f"  {m['key']} = {m['value']}（来源: {m.get('source', '?')}，更新: {updated}）")
-        return "\n".join(lines)
     except Exception as e:
-        LOG.error("查询记忆失败: %s", e)
-        return "查询记忆时出了点问题，稍后再试~"
+        raise SkillFailed("查询记忆时出了点问题，稍后再试~") from e
+
+    if not memories:
+        return f"我的数据库里还没有关于你（{sender_name}）的任何记忆哦~"
+
+    lines = [f"以下是我记住的关于你（{sender_name}）的信息："]
+    for m in memories:
+        updated = m.get("updated_at") or ""
+        lines.append(f"  {m['key']} = {m['value']}（来源: {m.get('source', '?')}，更新: {updated}）")
+    return "\n".join(lines)

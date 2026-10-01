@@ -5,12 +5,13 @@ Server Client - 与后端 AI 服务通信
 负责把消息转发到服务端的 /base/on-message；服务端只确认收到，AI 回复由服务端异步回调 base 发送。
 连上微信时从服务端的 /base/listen/list 取监听列表和各项设置。
 每次请求都带上这个 base 的机器人信息（bot_id、回调地址、昵称），server 据此登记和回调。
-使用全局 httpx.Client 复用 HTTP 连接，线程安全的熔断器。
+使用全局 httpx.Client 复用 HTTP 连接，线程安全的熔断器；没送到的消息放进本地队列，后台退避补发。
 """
 
 import logging
 import threading
 import time
+from collections import deque
 from typing import Callable, NamedTuple, Optional
 
 import httpx
@@ -71,7 +72,7 @@ class CircuitBreaker:
     线程安全的熔断器
     
     当连续失败次数超过阈值时，熔断器打开，
-    在重置超时后自动尝试恢复。
+    在重置超时后自动尝试恢复。打开和恢复各报一次，中途半开再失败不重复报。
     """
 
     def __init__(self, threshold: int = 3, reset_timeout: int = 60):
@@ -87,21 +88,45 @@ class CircuitBreaker:
         self._last_fail_time = 0.0
         self._threshold = threshold
         self._reset_timeout = reset_timeout
+        # 打开后到下一次成功之前为 True
+        self._tripped = False
+        self._tripped_at = 0.0
+        self._on_open: Optional[Callable[[], None]] = None
+
+    def on_open(self, callback: Optional[Callable[[], None]]) -> None:
+        """熔断器打开时调用一次"""
+        self._on_open = callback
 
     def record_failure(self) -> None:
         """记录一次失败"""
         with self._lock:
             self._fail_count += 1
             self._last_fail_time = time.time()
-            LOG.warning(f"Circuit breaker: failure recorded, count={self._fail_count}")
+            opened = self._fail_count >= self._threshold and not self._tripped
+            if opened:
+                self._tripped = True
+                self._tripped_at = self._last_fail_time
+        if not opened:
+            return
+        LOG.error("Circuit breaker opened after %s consecutive failures; messages are queued for resending",
+                  self._threshold)
+        callback = self._on_open
+        if callback is not None:
+            try:
+                callback()
+            except Exception:
+                LOG.exception("Circuit breaker open notification failed")
 
     def record_success(self) -> None:
         """记录一次成功，重置失败计数"""
         with self._lock:
-            if self._fail_count > 0:
-                LOG.info("Circuit breaker: success recorded, resetting")
+            recovered = self._tripped
+            down_for = time.time() - self._tripped_at
             self._fail_count = 0
             self._last_fail_time = 0.0
+            self._tripped = False
+        if recovered:
+            LOG.error("Circuit breaker recovered: server is reachable again after %.0fs", down_for)
 
     def is_open(self) -> bool:
         """
@@ -138,7 +163,43 @@ class CircuitBreaker:
 # 全局熔断器实例
 _circuit_breaker = CircuitBreaker(threshold=3, reset_timeout=60)
 
+
+def on_server_down(callback: Optional[Callable[[], None]]) -> None:
+    """连续转发失败、熔断器打开时调用一次，用来通知管理员"""
+    _circuit_breaker.on_open(callback)
+
+
 # ==================== API 函数 ====================
+
+def _post_chat(msg: ChatMsg, *, archive_only: bool = False) -> bool:
+    """把消息交给 server，返回 server 是否收下；失败时记日志、记熔断"""
+    try:
+        request = ChatRequest(token=config.http_token, bot=bot_info(), message=msg, archive_only=archive_only)
+
+        # 使用 HTTP client 发起请求（连接复用）
+        response = post(
+            CHAT_ENDPOINT,
+            data=request.to_json(),
+            timeout=(2, 10),
+            client=_get_client(),
+        )
+        response.raise_for_status()
+
+        resp_data = response.data if isinstance(response.data, dict) else {}
+        chat_response = ChatResponse.from_dict(resp_data)
+    except Exception as e:
+        LOG.warning("Server /base/on-message failed: chat=%s msg_hash=%s: %s: %s",
+                    msg.chat_name, msg.msg_hash, type(e).__name__, e)
+        _circuit_breaker.record_failure()
+        return False
+
+    if not chat_response.is_success:
+        LOG.error("Server /base/on-message returned business error: chat=%s msg_hash=%s: %s",
+                  msg.chat_name, msg.msg_hash, resp_data)
+        return False
+    _circuit_breaker.record_success()
+    return True
+
 
 def get_chat(msg: ChatMsg) -> str:
     """
@@ -148,45 +209,14 @@ def get_chat(msg: ChatMsg) -> str:
         msg: 消息对象
 
     Returns:
-        服务端接收成功返回空串；失败时返回给用户的提示
+        服务端接收成功返回空串；失败时返回给用户的提示，消息由调用方交给 retry_later
     """
-    # 检查熔断器
     if _circuit_breaker.is_open():
-        LOG.warning("Circuit breaker is open, request rejected")
+        LOG.warning("Circuit breaker is open, not forwarding: chat=%s msg_hash=%s", msg.chat_name, msg.msg_hash)
         return _get_error_message()
-
-    try:
-        # 构建请求
-        request = ChatRequest(token=config.http_token, bot=bot_info(), message=msg)
-        payload = request.to_json()
-
-        # 使用 HTTP client 发起请求（连接复用）
-        client = _get_client()
-        response = post(
-            CHAT_ENDPOINT,
-            data=payload,
-            timeout=(2, 10),
-            client=client,
-        )
-
-        # 检查 HTTP 状态
-        response.raise_for_status()
-
-        # 解析响应
-        resp_data = response.data if isinstance(response.data, dict) else {}
-        chat_response = ChatResponse.from_dict(resp_data)
-
-        if chat_response.is_success:
-            _circuit_breaker.record_success()
-            return ""
-        else:
-            LOG.error("Server /base/on-message returned business error: %s", resp_data)
-            return _get_error_message()
-
-    except Exception as e:
-        LOG.error("Server /base/on-message failed: %s", e)
-        _circuit_breaker.record_failure()
-        return _get_error_message()
+    if _post_chat(msg):
+        return ""
+    return _get_error_message()
 
 
 # 消息没交给 server 时回给发消息的人：偶尔失败一次，和连续失败到熔断
@@ -199,6 +229,122 @@ def _get_error_message() -> str:
     if _circuit_breaker.fail_count < _circuit_breaker.threshold:
         return SEND_FAILED_REPLY
     return SERVER_DOWN_REPLY
+
+
+# ==================== 补发队列 ====================
+
+RETRY_MAX_COUNT = 200
+RETRY_MAX_AGE = 600  # 秒，过了就不补发
+RETRY_FIRST_DELAY = 5
+RETRY_MAX_DELAY = 60
+
+
+class _Pending(NamedTuple):
+    msg: ChatMsg
+    archive_only: bool
+    queued_at: float
+
+
+class RetryQueue:
+    """
+    转发失败的消息先存在本地，后台线程按退避补发
+
+    按先后顺序补发，前面的发不出去就等下一轮；超出条数或放太久的丢弃并打 warning。
+    """
+
+    def __init__(self, send: Callable[..., bool], *, max_count: int = RETRY_MAX_COUNT,
+                 max_age: float = RETRY_MAX_AGE, first_delay: float = RETRY_FIRST_DELAY,
+                 max_delay: float = RETRY_MAX_DELAY, clock: Callable[[], float] = time.monotonic) -> None:
+        self._send = send
+        self._max_count = max_count
+        self._max_age = max_age
+        self._first_delay = first_delay
+        self._max_delay = max_delay
+        self._clock = clock
+        self._items: deque[_Pending] = deque()
+        self._lock = threading.Lock()
+        # 同一时间只有一个线程在补发，保证顺序
+        self._flush_lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread: Optional[threading.Thread] = None
+
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._items)
+
+    def put(self, msg: ChatMsg, *, archive_only: bool = False) -> None:
+        with self._lock:
+            self._items.append(_Pending(msg, archive_only, self._clock()))
+            while len(self._items) > self._max_count:
+                dropped = self._items.popleft()
+                LOG.warning("Resend queue is full (%s), dropped: chat=%s msg_hash=%s",
+                            self._max_count, dropped.msg.chat_name, dropped.msg.msg_hash)
+            size = len(self._items)
+            if self._thread is None and not self._stop.is_set():
+                self._thread = threading.Thread(target=self._run, name="ServerResend", daemon=True)
+                self._thread.start()
+        LOG.warning("Queued for resending: chat=%s msg_hash=%s pending=%s", msg.chat_name, msg.msg_hash, size)
+
+    def flush(self) -> bool:
+        """按顺序补发一轮，全部发完返回 True，遇到发不出去的就停下返回 False"""
+        with self._flush_lock:
+            while True:
+                with self._lock:
+                    self._drop_expired()
+                    if not self._items:
+                        return True
+                    item = self._items[0]
+                if not self._send(item.msg, archive_only=item.archive_only):
+                    return False
+                with self._lock:
+                    if self._items and self._items[0] is item:
+                        self._items.popleft()
+                LOG.info("Resent to server: chat=%s msg_hash=%s after %.0fs",
+                         item.msg.chat_name, item.msg.msg_hash, self._clock() - item.queued_at)
+
+    def stop(self) -> None:
+        """base 关闭时停止补发，还没发出去的打 warning"""
+        self._stop.set()
+        with self._lock:
+            left, self._items = list(self._items), deque()
+        for item in left:
+            LOG.warning("Shutting down before resending: chat=%s msg_hash=%s",
+                        item.msg.chat_name, item.msg.msg_hash)
+
+    def _drop_expired(self) -> None:
+        now = self._clock()
+        while self._items and now - self._items[0].queued_at > self._max_age:
+            dropped = self._items.popleft()
+            LOG.warning("Gave up resending after %.0fs: chat=%s msg_hash=%s",
+                        now - dropped.queued_at, dropped.msg.chat_name, dropped.msg.msg_hash)
+
+    def _run(self) -> None:
+        delay = self._first_delay
+        while not self._stop.wait(delay):
+            try:
+                done = self.flush()
+            except Exception:
+                LOG.exception("Resending to server failed")
+                done = False
+            delay = self._first_delay if done else min(delay * 2, self._max_delay)
+
+
+_retry_queue = RetryQueue(_post_chat)
+
+
+def retry_later(msg: ChatMsg, *, archive_only: bool = False) -> None:
+    """
+    没交给 server 的消息放进补发队列
+
+    Args:
+        archive_only: 已经提示过用户重发时为 True，补发只为存档
+    """
+    _retry_queue.put(msg, archive_only=archive_only)
+
+
+def stop_retrying() -> None:
+    """base 关闭时调用，没补发出去的消息打 warning"""
+    _retry_queue.stop()
 
 
 # ==================== 监听列表 ====================

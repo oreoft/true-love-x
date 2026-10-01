@@ -64,13 +64,18 @@ def _run_task(task_id: str, job_name: str, receivers: list[str], schedule: dict,
     if not _takes_receiver(func):
         func(*args)
         return
+    failed = []
     for index, receiver in enumerate(receivers):
         if index:
             time.sleep(30)
         try:
             func(*args, receiver)
         except Exception as e:
-            LOG.exception("任务 %s 推送到 %s 失败: %s", job_name, receiver, e)
+            LOG.exception("任务 %s 推送到 %s 失败", job_name, receiver)
+            failed.append(f"{receiver}（{e}）")
+    # 一个接收者失败不影响其他人，但整次执行要让调度器记成失败（会通知管理员）
+    if failed:
+        raise RuntimeError(f"任务 {job_name} 有 {len(failed)}/{len(receivers)} 个接收者推送失败: {', '.join(failed)}")
 
 
 def _clean(job_name: str, receivers: Any, schedule: Any) -> tuple[str, list[str], dict, Any]:

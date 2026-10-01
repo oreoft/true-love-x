@@ -30,8 +30,8 @@ def keep_awake() -> None:
         previous = ctypes.windll.kernel32.SetThreadExecutionState(
             ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
         )
-    except Exception as e:
-        LOG.warning(f"Could not keep the system awake: {e}")
+    except Exception:
+        LOG.warning("Could not keep the system awake", exc_info=True)
         return
     # 失败时返回 NULL
     if not previous:

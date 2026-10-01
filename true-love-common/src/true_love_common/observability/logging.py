@@ -6,6 +6,8 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from queue import Queue
 from typing import Any
@@ -108,25 +110,24 @@ class LoggingConfig:
         handlers: list[logging.Handler] = [console_handler]
 
         loki_enabled = False
+        loki_error = ""
         if enable_loki and loki_url and loki_user_id and loki_api_key:
             try:
-                from logging_loki import LokiQueueHandler
-
-                loki_handler = LokiQueueHandler(
+                loki_handler = _build_loki_handler(
                     Queue(queue_size),
+                    _LokiFailureReporter(service_name, console_handler),
                     url=f"{loki_url.rstrip('/')}/loki/api/v1/push",
                     tags={"service_name": service_name},
                     auth=(loki_user_id, loki_api_key),
-                    version="1",
                 )
                 loki_handler.setLevel(log_level)
                 loki_handler.addFilter(trace_filter)
                 handlers.append(loki_handler)
                 loki_enabled = True
             except ImportError:
-                print("[LoggingConfig] 警告: 未安装 python-logging-loki，Loki 推送已禁用")
+                loki_error = "未安装 python-logging-loki"
             except Exception as e:
-                print(f"[LoggingConfig] 警告: 无法创建 LokiHandler: {e}")
+                loki_error = f"无法创建 LokiHandler: {e!r}"
 
         root_logger = logging.getLogger()
         root_logger.setLevel(log_level)
@@ -145,6 +146,8 @@ class LoggingConfig:
             json_format,
             extra={"extra_fields": {"loki": loki_enabled}},
         )
+        if loki_error:
+            logging.getLogger("LoggingConfig").warning("Loki 推送已禁用: %s", loki_error)
 
     @classmethod
     def add_loki_tags(cls, provider) -> None:
@@ -173,3 +176,60 @@ class LoggingConfig:
                 sys.stdout = open(sys.stdout.fileno(), mode="w", encoding="utf-8", buffering=1)
         except Exception:
             pass
+
+
+# 推 Loki 失败（超时、认证失效、队列满）时日志会成批丢失，库只往 stderr 打 traceback。
+# 这里改成限频地在控制台记一条 WARNING，直接交给控制台 handler，不再进 Loki 绕回来。
+_LOKI_TIMEOUT = (3, 10)
+_LOKI_REPORT_INTERVAL = 60
+
+
+class _LokiFailureReporter:
+    def __init__(self, service_name: str, console_handler: logging.Handler):
+        self._service_name = service_name
+        self._console = console_handler
+        self._lock = threading.Lock()
+        self._dropped = 0
+        self._last_report = 0.0
+
+    def failed(self, reason: str, error: BaseException | None = None) -> None:
+        with self._lock:
+            self._dropped += 1
+            now = time.monotonic()
+            if self._last_report and now - self._last_report < _LOKI_REPORT_INTERVAL:
+                return
+            dropped, self._dropped, self._last_report = self._dropped, 0, now
+        record = logging.LogRecord(
+            "LoggingConfig", logging.WARNING, __file__, 0,
+            "Loki 推送失败，上次报告以来丢了 %s 条日志: %s %r",
+            (dropped, reason, error), None,
+        )
+        try:
+            self._console.handle(record)
+        except Exception:
+            pass
+
+
+def _build_loki_handler(queue: Queue, reporter: _LokiFailureReporter, **kwargs: Any) -> logging.Handler:
+    import requests
+    from logging_loki import LokiQueueHandler
+
+    class _TimeoutSession(requests.Session):
+        def request(self, *args: Any, **kw: Any):
+            kw.setdefault("timeout", _LOKI_TIMEOUT)
+            return super().request(*args, **kw)
+
+    class _Handler(LokiQueueHandler):
+        def handleError(self, record: logging.LogRecord) -> None:  # noqa: N802
+            reporter.failed("队列已满", sys.exc_info()[1])
+
+    handler = _Handler(queue, version="1", **kwargs)
+    loki = handler.handler
+    loki.emitter.session_class = _TimeoutSession
+
+    def _push_failed(record: logging.LogRecord) -> None:
+        loki.emitter.close()
+        reporter.failed("推送出错", sys.exc_info()[1])
+
+    loki.handleError = _push_failed
+    return handler

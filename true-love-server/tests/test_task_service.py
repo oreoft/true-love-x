@@ -187,7 +187,8 @@ class TaskTests(TaskServiceCase):
     def test_one_failing_receiver_does_not_stop_the_rest(self):
         task = self.tasks.add_task(BOT, "notice_moyu_schedule", ["坏群", "家人群"], self.daily())
 
-        with self.assertLogs("TaskService", level="ERROR"):
+        # 其他接收者照推，但整次执行要报失败，调度器才不会记成成功
+        with self.assertLogs("TaskService", level="ERROR"), self.assertRaisesRegex(RuntimeError, "坏群"):
             self.run_job(task["task_id"])
 
         self.assertEqual(self.calls[-1], ("notice_moyu_schedule", BOT, "家人群"))

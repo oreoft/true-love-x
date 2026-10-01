@@ -2,7 +2,7 @@
 """语音合成 Skill（复用 AI 现有 audio_service）"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("AudioSkill")
 
@@ -39,22 +39,18 @@ async def generate_audio(params: dict, ctx: dict) -> str:
     if not text:
         return "诶嘿~请告诉我你想让我说什么哦~"
 
+    from true_love_ai.memory import persona_service
+    from true_love_ai.services.audio_service import AudioService, GEN_AUDIO_DIR
+    # 语音风格跟着人设走：receiver 就是这次回复的群或私聊对象
+    style = persona_service.resolve(ctx.get("bot_id", ""), receiver).voice_style
     try:
-        from true_love_ai.memory import persona_service
-        from true_love_ai.services.audio_service import AudioService, GEN_AUDIO_DIR
-        # 语音风格跟着人设走：receiver 就是这次回复的群或私聊对象
-        style = persona_service.resolve(ctx.get("bot_id", ""), receiver).voice_style
         result = await AudioService().text_to_speech(text=text, style=style)
-
-        if result and result.audio_id:
-            from true_love_ai.agent.server_client import send_file
-            ok = await send_file(receiver, f"{GEN_AUDIO_DIR.name}/{result.audio_id}.wav")
-            if ok:
-                return "好耶~语音已生成并发送！"
-            LOG.error("generate_audio: send_file 返回失败 audio_id=%s", result.audio_id)
-            return "呜呜~语音生成好了但是发送失败了捏，稍后再试试吧~"
-
-        return "呜呜~语音生成失败了捏，稍后再试试吧~"
     except Exception as e:
-        LOG.error("generate_audio error: %s", e)
-        return "呜呜~语音生成出错了捏~"
+        raise SkillFailed("呜呜~语音生成出错了捏~") from e
+    if not result or not result.audio_id:
+        raise SkillFailed("呜呜~语音生成失败了捏，稍后再试试吧~")
+
+    from true_love_ai.agent.server_client import send_file
+    if not await send_file(receiver, f"{GEN_AUDIO_DIR.name}/{result.audio_id}.wav"):
+        raise SkillFailed("呜呜~语音生成好了但是发送失败了捏，稍后再试试吧~")
+    return "好耶~语音已生成并发送！"

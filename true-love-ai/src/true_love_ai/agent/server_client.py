@@ -20,6 +20,19 @@ from true_love_ai.core.config import get_config
 
 LOG = logging.getLogger("ServerClient")
 
+# 调用本身没走通（网络、HTTP 报错、返回的不是 JSON 对象）时，失败结果里的 code；server 自己的业务码都不是负数
+CALL_FAILED = -1
+
+
+class ServerCallFailed(Exception):
+    """查询类接口失败时抛出，好跟"查到了但是没有数据"区分开"""
+
+    def __init__(self, path: str, result: dict):
+        self.path = path
+        self.code = result.get("code")
+        self.message = result.get("message", "")
+        super().__init__(f"{path} 失败: code={self.code} message={self.message}")
+
 
 # 当前这次处理的消息来自哪个机器人；不在处理消息时为空，server 用默认机器人
 _bot_id: contextvars.ContextVar[str] = contextvars.ContextVar("bot_id", default="")
@@ -49,24 +62,35 @@ def _get_token() -> str:
     return config.http.token[0] if config.http and config.http.token else ""
 
 
+def _unwrap(path: str, result) -> dict:
+    """
+    把 HTTP 结果换成 server 的 ApiResponse：{code, message, data}，code=0 才算成功
+
+    HTTP 层失败 common 的 http client 已经记了日志，这里只记 HTTP 200 但业务没成功的情况。
+    失败时一律带 message，调用方读 message 给用户看。
+    """
+    if not result.ok:
+        return {"code": CALL_FAILED, "message": result.error or result.text or f"HTTP {result.status_code}"}
+    data = result.data
+    if not isinstance(data, dict):
+        LOG.warning("Server 回调返回的不是 JSON 对象: path=%s body=%s", path, (result.text or "")[:200])
+        return {"code": CALL_FAILED, "message": "server 返回格式不对"}
+    if data.get("code") != 0:
+        LOG.warning("Server 回调业务失败: path=%s code=%s message=%s", path, data.get("code"), data.get("message"))
+        data.setdefault("message", "未知错误")
+    return data
+
+
 def _post(path: str, payload: dict, timeout: float = 10.0) -> dict:
     """同步 POST"""
     url = f"{server_host()}{path}"
-    result = post_json(url, _with_bot(payload), timeout=timeout)
-    if result.ok:
-        return result.data if isinstance(result.data, dict) else {}
-    LOG.error("Server callback failed path=%s error=%s", path, result.error or result.text)
-    return {"code": -1, "msg": result.error or result.text}
+    return _unwrap(path, post_json(url, _with_bot(payload), timeout=timeout))
 
 
 async def _async_post(path: str, payload: dict, timeout: float = 10.0) -> dict:
     """异步 POST"""
     url = f"{server_host()}{path}"
-    result = await async_post_json(url, _with_bot(payload), timeout=timeout)
-    if result.ok:
-        return result.data if isinstance(result.data, dict) else {}
-    LOG.error("Server callback failed path=%s error=%s", path, result.error or result.text)
-    return {"code": -1, "msg": result.error or result.text}
+    return _unwrap(path, await async_post_json(url, _with_bot(payload), timeout=timeout))
 
 
 # ==================== 消息发送 ====================
@@ -74,6 +98,12 @@ async def _async_post(path: str, payload: dict, timeout: float = 10.0) -> dict:
 def notify_master_sync(content: str) -> bool:
     """同步给管理员发通知（用于启动/关闭等非异步场景）。管理员是谁由 base 决定，这里不传接收者"""
     result = _post("/action/send", {"is_master": True, "content": content})
+    return result.get("code") == 0
+
+
+async def notify_master(content: str) -> bool:
+    """给管理员发通知，管理员是谁由 base 决定"""
+    result = await _async_post("/action/send", {"is_master": True, "content": content})
     return result.get("code") == 0
 
 
@@ -109,9 +139,8 @@ async def add_reminder(job_id: str, target_time_iso: str, receiver: str,
     })
 
 
-async def delete_reminder(job_id: str) -> bool:
-    result = await _async_post("/action/reminder/delete", {"job_id": job_id})
-    return result.get("code") == 0
+async def delete_reminder(job_id: str) -> dict:
+    return await _async_post("/action/reminder/delete", {"job_id": job_id})
 
 
 async def update_reminder(job_id: str, new_time_iso: str = "",
@@ -124,10 +153,12 @@ async def update_reminder(job_id: str, new_time_iso: str = "",
 
 
 async def query_reminders(receiver: str) -> list[dict]:
-    result = await _async_post("/action/reminder/query", {
-        "receiver": receiver,
-    })
-    return result.get("data", {}).get("jobs", [])
+    """没有提醒时返回空列表；查询失败抛 ServerCallFailed"""
+    path = "/action/reminder/query"
+    result = await _async_post(path, {"receiver": receiver})
+    if result.get("code") != 0:
+        raise ServerCallFailed(path, result)
+    return (result.get("data") or {}).get("jobs", [])
 
 
 # ==================== 监听管理 ====================
@@ -162,11 +193,14 @@ async def fetch_media_bytes(ref: str, timeout: float = 15.0) -> bytes | None:
 
 async def query_history(chat_id: str, sender_id: str = "", sender_name: str = "",
                         limit: int = 500) -> list[dict]:
-    """查询当前机器人的聊天历史，sender_id / sender_name 均为可选过滤条件"""
+    """查询当前机器人的聊天历史，sender_id / sender_name 均为可选过滤条件；查询失败抛 ServerCallFailed"""
+    path = "/action/history"
     payload = {"chat_id": chat_id, "limit": limit}
     if sender_id:
         payload["sender_id"] = sender_id
     if sender_name:
         payload["sender_name"] = sender_name
-    result = await _async_post("/action/history", payload, timeout=20.0)
-    return result.get("data", {}).get("messages", [])
+    result = await _async_post(path, payload, timeout=20.0)
+    if result.get("code") != 0:
+        raise ServerCallFailed(path, result)
+    return (result.get("data") or {}).get("messages", [])

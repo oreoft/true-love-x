@@ -13,9 +13,20 @@ Listen Manager - 监听管理器
 """
 
 import logging
+
+from true_love_common.http.exceptions import BusinessException
+from true_love_common.http.response import BizCode
+
 from . import base_client, listen_store
 
 LOG = logging.getLogger("ListenManager")
+
+
+class ListenStatusError(BusinessException):
+    """base 没能报告监听状态（微信离线、base 连不上等），这时不知道哪些监听坏了"""
+
+    def __init__(self, message: str):
+        super().__init__(code=BizCode.ROBOT_NOT_READY, message=message)
 
 
 class ListenManager:
@@ -45,6 +56,9 @@ class ListenManager:
 
         Returns:
             状态结果，包含 listeners 和 summary
+
+        Raises:
+            ListenStatusError: 状态查询本身失败；这时不能把所有监听都当成坏的去重置
         """
         db_chats = listen_store.list_all(self.bot_id)
 
@@ -53,10 +67,9 @@ class ListenManager:
 
         result = await self.base.listen_status(db_chats)
         if not result.get("success"):
-            LOG.error(f"listen_status failed: {result.get('message')}")
-            reasons = {c: "status_failed" for c in db_chats}
-        else:
-            reasons = (result.get("data") or {}).get("results", {})
+            LOG.error("listen_status failed: bot_id=%s message=%s", self.bot_id, result.get("message"))
+            raise ListenStatusError(f"查询监听状态失败: {result.get('message')}")
+        reasons = (result.get("data") or {}).get("results", {})
 
         listeners = []
         summary = {"healthy": 0, "unhealthy": 0}
@@ -69,7 +82,7 @@ class ListenManager:
                 listeners.append({"chat": chat_name, "status": "unhealthy", "reason": reason})
                 summary["unhealthy"] += 1
 
-        LOG.info(f"Listener status: {summary}")
+        LOG.info("Listener status: bot_id=%s summary=%s", self.bot_id, summary)
         return {"listeners": listeners, "summary": summary}
 
     # ==================== 增删接口 ====================
@@ -92,13 +105,13 @@ class ListenManager:
         """
         # 检查是否已存在（仅在非 skip_store 模式下检查）
         if not skip_store and listen_store.exists(self.bot_id, chat_name):
-            LOG.info(f"[{chat_name}] already in listen list")
+            LOG.info("[%s] already in listen list", chat_name)
             return {"success": True, "message": f"[{chat_name}] already exists"}
 
         # Step 1: 切换到聊天窗口
         chat_with_result = await self.base.execute_wx("ChatWith", {"who": chat_name})
         if not chat_with_result.get("success"):
-            LOG.error(f"ChatWith failed for [{chat_name}]: {chat_with_result.get('message')}")
+            LOG.error("ChatWith failed for [%s]: %s", chat_name, chat_with_result.get("message"))
             return {"success": False, "message": f"ChatWith failed: {chat_with_result.get('message')}"}
 
         # Step 2: 调用 Base 的 /listen/add 添加监听
@@ -108,19 +121,19 @@ class ListenManager:
             # SDK 添加成功，写入数据库（除非 skip_store）
             if not skip_store:
                 listen_store.add(self.bot_id, chat_name)
-            LOG.info(f"Added listener for [{chat_name}]")
+            LOG.info("Added listener for [%s]", chat_name)
             return {"success": True, "message": f"Added listener for [{chat_name}]"}
         else:
-            LOG.error(f"Failed to add listener for [{chat_name}]: {result.get('message')}")
+            LOG.error("Failed to add listener for [%s]: %s", chat_name, result.get("message"))
             return {"success": False, "message": result.get("message", "Unknown error")}
 
     async def remove_listen(self, chat_name: str, skip_store: bool = False) -> dict:
         """
         移除监听
-        
+
         流程：
-        1. 调用 Base 移除 SDK 监听
-        2. 从数据库删除（除非 skip_store=True）
+        1. 调用 Base 移除 SDK 监听（SDK 返回失败也算失败）
+        2. 成功后从数据库删除（除非 skip_store=True）；失败时不删库，免得 base 还在监听而列表里没了
         
         Args:
             chat_name: 聊天对象名称
@@ -131,18 +144,29 @@ class ListenManager:
         """
         # 调用 Base 的 RemoveListenChat
         result = await self.base.execute_wx("RemoveListenChat", {"nickname": chat_name})
-
-        if not result.get("success"):
-            LOG.warning(f"SDK remove failed for [{chat_name}]: {result.get('message')}")
+        if result.get("success"):
+            message = f"Removed listener for [{chat_name}]"
+        elif await self._base_not_listening(chat_name):
+            # SDK 移除失败是因为 base 本来就没在监听它，列表里照样删
+            LOG.info("[%s] was not being listened to on base, removed from the list only", chat_name)
+            message = f"[{chat_name}] was not being listened to, removed from the list"
+        else:
+            LOG.warning("Failed to remove listener for [%s]: %s", chat_name, result.get("message"))
+            return {"success": False, "message": f"Remove listener failed: {result.get('message') or 'unknown error'}"}
 
         if not skip_store:
             listen_store.remove(self.bot_id, chat_name)
+        LOG.info("Removed listener for [%s]", chat_name)
+        return {"success": True, "message": message}
 
-        if result.get("success"):
-            LOG.info(f"Removed listener for [{chat_name}]")
-            return {"success": True, "message": f"Removed listener for [{chat_name}]"}
-        else:
-            return {"success": True, "message": f"Removed from listen list (SDK: {result.get('message', 'failed')})"}
+    async def _base_not_listening(self, chat_name: str) -> bool:
+        """问 base 这个聊天还在不在监听；查询本身失败时当作还在监听（不能确定就不删库）"""
+        status = await self.base.listen_status([chat_name])
+        if not status.get("success"):
+            LOG.warning("listen_status for [%s] failed: %s", chat_name, status.get("message"))
+            return False
+        reasons = (status.get("data") or {}).get("results", {})
+        return reasons.get(chat_name, "not_listening") == "not_listening"
 
     # ==================== 刷新/重置接口 ====================
 
@@ -199,10 +223,8 @@ class ListenManager:
                 listener_info["after"] = "healthy" if success else "unhealthy"
                 if success:
                     success_count += 1
-                    LOG.info(f"Reset listener for [{chat_name}] succeeded")
                 else:
                     fail_count += 1
-                    LOG.error(f"Reset listener for [{chat_name}] failed: {reset_result.get('message')}")
 
             result_listeners.append(listener_info)
 
@@ -228,13 +250,19 @@ class ListenManager:
         if not listen_store.exists(self.bot_id, chat_name):
             return {"success": False, "message": f"Chat [{chat_name}] not in listen list"}
 
-        await self.remove_listen(chat_name, skip_store=True)
+        # 移除失败（查询失败或 base 还在监听）也照样重新添加，只记下来
+        removed = await self.remove_listen(chat_name, skip_store=True)
+        if not removed.get("success"):
+            LOG.warning("Reset [%s]: remove failed, adding it again anyway: %s", chat_name, removed.get("message"))
         result = await self.base.add_listen_chat(chat_name)
         if result.get("success"):
-            LOG.info(f"Reset listener for [{chat_name}] succeeded")
+            LOG.info("Reset listener for [%s] succeeded", chat_name)
             return {"success": True, "message": f"Reset listener for [{chat_name}]"}
-        LOG.error(f"Failed to re-add listener for [{chat_name}]: {result.get('message')}")
-        return {"success": False, "message": f"Failed to re-add listener: {result.get('message')}"}
+        message = f"Failed to re-add listener: {result.get('message')}"
+        if not removed.get("success"):
+            message += f" ({removed.get('message')})"
+        LOG.error("Reset listener for [%s] failed: %s", chat_name, message)
+        return {"success": False, "message": message}
 
     async def reset_all_listeners(self) -> dict:
         """
@@ -247,7 +275,7 @@ class ListenManager:
         recovered = []
         failed = []
 
-        LOG.info(f"Starting reset all listeners, total: {len(db_chats)}")
+        LOG.info("Starting reset all listeners: bot_id=%s total=%d", self.bot_id, len(db_chats))
         for chat_name in db_chats:
             result = await self.reset_listener(chat_name)
             (recovered if result.get("success") else failed).append(chat_name)
@@ -255,7 +283,9 @@ class ListenManager:
         message = f"Reset complete: {len(recovered)}/{len(db_chats)} recovered"
         if failed:
             message += f", {len(failed)} failed"
-        LOG.info(message)
+            LOG.error("Reset all listeners: bot_id=%s %s: %s", self.bot_id, message, failed)
+        else:
+            LOG.info("Reset all listeners: bot_id=%s %s", self.bot_id, message)
 
         return {
             "success": not failed,

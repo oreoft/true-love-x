@@ -18,9 +18,13 @@ Base Client - server 调 base
 仿照 _wechat.py 加一个客户端，并在 bot_registry.CAPABILITIES 里登记能力。
 """
 
+import logging
+
 from ._client import BaseClient
 from ._wechat import WeChatClient
 from .. import bot_registry
+
+LOG = logging.getLogger("BaseClient")
 
 __all__ = ["BaseClient", "WeChatClient", "NotSupported", "for_bot", "wechat",
            "send_text", "send_file", "send_to_master"]
@@ -53,6 +57,7 @@ async def send_text(bot_id: str, receiver: str, at_user: str, content: str,
     except Exception as e:
         if raise_on_error:
             raise
+        LOG.warning("send_text via bot [%s] failed: %s", bot_id, e)
         return False, str(e)
 
 
@@ -62,6 +67,7 @@ async def send_file(bot_id: str, url: str, receiver: str, raise_on_error: bool =
     except Exception as e:
         if raise_on_error:
             raise
+        LOG.warning("send_file via bot [%s] failed: %s", bot_id, e)
         return False, str(e)
 
 
@@ -70,4 +76,5 @@ async def send_to_master(bot_id: str, content: str) -> tuple[bool, str]:
     try:
         return await BaseClient(bot_registry.resolve(bot_id)).send_to_master(content)
     except Exception as e:
+        LOG.warning("send_to_master via bot [%s] failed: %s", bot_id, e)
         return False, str(e)

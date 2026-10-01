@@ -12,15 +12,21 @@ from true_love_ai.core.config import get_config
 from true_love_ai.agent.server_client import notify_master_sync
 from true_love_ai.llm.llm_bootstrap import init_llm
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("Main")
+
+
+def _notify_master(content: str) -> None:
+    """给管理员发通知；发不出去只记日志，不影响启动和退出"""
+    try:
+        if not notify_master_sync(content):
+            LOG.warning("管理员通知没发出去: %s", content)
+    except Exception as e:
+        LOG.warning("管理员通知发送异常: content=%s err=%s", content, e, exc_info=True)
 
 
 def notice_master():
     """启动通知"""
-    try:
-        notify_master_sync("tl-ai 启动成功")
-    except Exception as e:
-        LOG.warning(f"启动通知发送失败: {e}")
+    _notify_master("tl-ai 启动成功")
 
 
 def setup_signal_handlers():
@@ -28,10 +34,7 @@ def setup_signal_handlers():
 
     def handler(sig, frame):
         LOG.info("收到关闭信号，正在退出...")
-        try:
-            notify_master_sync("tl-ai 正在关闭...")
-        except Exception:
-            pass
+        _notify_master("tl-ai 正在关闭...")
         exit(0)
 
     signal.signal(signal.SIGINT, handler)
@@ -67,7 +70,7 @@ def main():
 
     LOG.info("=" * 50)
     LOG.info("tl-ai 服务启动中...")
-    LOG.info(f"版本: 0.2.0")
+    LOG.info("版本: 0.2.0")
     LOG.info("=" * 50)
 
     # 获取 HTTP 配置

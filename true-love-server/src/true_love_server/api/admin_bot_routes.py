@@ -212,6 +212,9 @@ async def listen_save_settings(bot_id: str, request: dict):
     if for_base:
         result = await base_client.wechat(bot.bot_id).apply_settings(for_base)
         applied = result.get("success", False)
+        if not applied:
+            LOG.warning("设置已保存但推给 base 失败: bot_id=%s settings=%s err=%s",
+                        bot.bot_id, for_base, result.get("message"))
     return ApiResponse(data={"settings": bot_settings.admin_settings(bot.bot_id), "applied": applied})
 
 

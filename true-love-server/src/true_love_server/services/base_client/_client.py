@@ -65,12 +65,16 @@ class BaseClient:
     async def _send(self, label: str, path: str, payload: dict, timeout=_TIMEOUT,
                     raise_on_error: bool = False) -> tuple[bool, str]:
         try:
-            return api_response_ok(await self._post(path, payload, timeout=timeout))
+            ok, message = api_response_ok(await self._post(path, payload, timeout=timeout))
         except Exception as e:
-            self.log.error("%s to bot [%s] failed: %s", label, self.bot.bot_id, e)
+            self.log.exception("%s to bot [%s] failed", label, self.bot.bot_id)
             if raise_on_error:
                 raise
             return False, str(e)
+        if not ok:
+            # base 回了业务失败（code != 0）或 HTTP 非 2xx
+            self.log.error("%s to bot [%s] failed: %s", label, self.bot.bot_id, message)
+        return ok, message
 
     async def send_text(self, receiver: str, at_user: str, content: str,
                         raise_on_error: bool = False, reply_msg_id: str = "") -> tuple[bool, str]:
@@ -103,4 +107,5 @@ class BaseClient:
             return {"reachable": True, "online": bool(data.get("wx_online")), "self_name": data.get("self_name"),
                     "since": data.get("since")}
         except Exception as e:
+            self.log.warning("status of bot [%s] failed: %s", self.bot.bot_id, e, exc_info=True)
             return {"reachable": False, "online": False, "message": str(e)}
