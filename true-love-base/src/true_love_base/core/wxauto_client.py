@@ -54,6 +54,9 @@ _IGNORED_ATTRS = {"weixin", "system", "self"}
 # GetNextNewMessage 和会话右键菜单没有加锁，要自己包一层，免得轮询点开会话时正好有人在主窗口里发消息
 # 会话右键菜单里开关免打扰的选项
 _MUTE_OPTION = "消息免打扰"
+# 会话右键菜单里把聊天弹成独立窗口的选项，和弹出后等窗口出现的秒数
+_POP_OUT_OPTION = "独立窗口显示"
+_POP_OUT_WAIT = 3.0
 
 # 在主线程以外读会话列表要先在这个线程里初始化 UIA；不初始化时 GetNextNewMessage 不报错，只是永远拿不到消息
 _uia_thread = local()
@@ -494,7 +497,10 @@ class WxAutoClient():
                 LOG.info(f"Registering listener for [{chat_name}]")
 
                 internal_callback = self._create_internal_callback(chat_name, callback)
-                result = self.wx.AddListenChat(chat_name, internal_callback)
+                with ui_transaction():
+                    if self.wx.GetSubWindow(chat_name) is None:
+                        self._pop_out(chat_name)
+                    result = self.wx.AddListenChat(chat_name, internal_callback)
                 if not self._check_response(result, "AddListenChat", chat_name):
                     return False
                 # AddListenChat 可能报成功但聊天窗口没有弹出来，这种监听收不到任何消息
@@ -507,6 +513,35 @@ class WxAutoClient():
             except Exception:
                 LOG.exception("Failed to add listener for [%s]", chat_name)
                 return False
+
+    def _pop_out(self, chat_name: str) -> None:
+        """
+        用会话右键菜单的"独立窗口显示"把聊天弹成独立窗口，AddListenChat 看到窗口已经在了会直接接管
+
+        SDK 自己是双击会话来弹窗口的。同一个进程里关过这个聊天的窗口后，双击经常没反应，
+        SDK 等不到窗口就报 MoveWindow 1400，重置监听因此加不回去。右键菜单弹窗口在 ser 上实测每次都成功。
+        弹不出来也不报错，交给 SDK 自己再双击一次。
+        """
+        try:
+            import win32gui
+
+            _init_uia_in_thread()
+            session = self._session(chat_name)
+            if session is None:
+                self.wx.ChatWith(chat_name)
+                session = self._session(chat_name)
+            if session is None or not session.select_option(_POP_OUT_OPTION):
+                LOG.warning("[%s] is not in the session list or has no pop-out option", chat_name)
+                return
+            window_class = win32gui.GetClassName(self.wx._api.HWND)
+            deadline = time.monotonic() + _POP_OUT_WAIT
+            while not win32gui.FindWindow(window_class, chat_name):
+                if time.monotonic() >= deadline:
+                    LOG.warning("[%s] chat window did not pop out", chat_name)
+                    return
+                time.sleep(0.1)
+        except Exception:
+            LOG.warning("Failed to pop out the chat window of [%s]", chat_name, exc_info=True)
 
     def listen_health(self, chat_names: list[str]) -> dict[str, Optional[str]]:
         """

@@ -109,6 +109,56 @@ class ListenHealthTests(unittest.TestCase):
         self.assertIsNone(self.client.probe_listen("room"))
 
 
+class PopOutTests(unittest.TestCase):
+    """Before handing a chat to the SDK, base pops its window out from the session menu."""
+
+    def setUp(self):
+        self.desktop = WeChatDesktop()
+        self.client = load_client_module(self.desktop).WxAutoClient(bot_id="win11-ser")
+        self.sdk = new_sdk()
+        self.desktop.log_in(self.sdk)
+        self.assertTrue(self.client.connect())
+        self.steps = []
+        # 桌面上弹出来的聊天窗口：{标题: 句柄}
+        self.popped = {}
+        self.session = Mock(select_option=Mock(side_effect=self.pop_out))
+        self.session.name = "room"
+        self.sdk.GetSession.return_value = [self.session]
+        self.sdk.AddListenChat.side_effect = lambda name, callback: self.steps.append("add") or True
+        self.sdk.GetSubWindow.side_effect = lambda name: Mock(_api=Mock(HWND=self.popped.get(name, 1)))
+        self.win32gui = module("win32gui", GetClassName=lambda hwnd: "Qt51514QWindowIcon",
+                               FindWindow=lambda cls, title: self.popped.get(title, 0))
+
+    def pop_out(self, option):
+        self.steps.append(option)
+        self.popped[self.session.name] = 33
+        return True
+
+    def add(self, name):
+        with patch.dict(sys.modules, {"win32gui": self.win32gui}):
+            return self.client.add_message_listener(name, lambda msg, chat: None)
+
+    def test_missing_window_is_popped_out_from_the_session_menu_first(self):
+        windows = iter([None])
+        self.sdk.GetSubWindow.side_effect = lambda name: next(windows, Mock(_api=Mock(HWND=33)))
+
+        self.assertTrue(self.add("room"))
+        self.assertEqual(self.steps, ["独立窗口显示", "add"])
+
+    def test_open_window_is_handed_over_as_it_is(self):
+        self.assertTrue(self.add("room"))
+        self.assertEqual(self.steps, ["add"])
+
+    def test_chat_missing_from_the_session_list_is_opened_first(self):
+        windows = iter([None])
+        self.sdk.GetSubWindow.side_effect = lambda name: next(windows, Mock(_api=Mock(HWND=33)))
+        self.sdk.GetSession.side_effect = [[], [self.session]]
+
+        self.assertTrue(self.add("room"))
+        self.sdk.ChatWith.assert_called_once_with("room")
+        self.assertEqual(self.steps, ["独立窗口显示", "add"])
+
+
 def load_client_module(desktop, real_converter=False):
     """Load the real client with only the Windows SDK replaced; optionally keep the real message converter."""
     dependencies = {
