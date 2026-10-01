@@ -36,6 +36,17 @@ MEDIA_DIRS = [Path("moyu-jpg"), Path("zaobao-jpg")]
 # 默认网络请求超时时间（秒）
 DEFAULT_TIMEOUT = 60
 
+# 早报开头的问候：国内早上一条，美国早上一条
+CN_MORNING = "早上好☀️家人萌~"
+US_MORNING = "早上好☀️友友们~, \n现在国内太阳已经落下, 多赢阿美莉卡一天"
+
+# 早报里跟在问候后面的行情：(小标题, AI 的 /data 接口, 参数)；AI 查不到就返回空串，这一段直接不发
+MARKET_SECTIONS = [
+    ("今日日元汇率情况：", "/data/currency", {"currency": "日元"}),
+    ("今日美元汇率情况：", "/data/currency", {"currency": "美元"}),
+    ("今日黄金汇率情况：", "/data/gold", None),
+]
+
 
 def log_function_execution(func):
     """装饰器：在函数执行前后打印信息，并记录执行时间。"""
@@ -58,7 +69,7 @@ def _send_img(bot_id: str, path: str, receiver: str) -> tuple[bool, str]:
     return asyncio.run(base_client.send_file(bot_id, to_url(path, server_host()), receiver))
 
 
-def send_daily_notice(bot_id, room_id, content='早上好☀️家人萌~'):
+def send_daily_notice(bot_id, room_id, content=CN_MORNING):
     try:
         ensure_today_images()
     except Exception as e:
@@ -69,17 +80,10 @@ def send_daily_notice(bot_id, room_id, content='早上好☀️家人萌~'):
     moyu_file_path = f'moyu-jpg/{current_date}.jpg'
     zao_bao_file_path = f'zaobao-jpg/{current_date}.jpg'
 
-    r_resp = fetch_data("/data/currency", {"currency": "日元"})
-    if r_resp and "失败" not in r_resp:
-        content += "\n\n今日日元汇率情况：\n" + r_resp
-
-    r_resp2 = fetch_data("/data/currency", {"currency": "美元"})
-    if r_resp2 and "失败" not in r_resp2:
-        content += "\n\n今日美元汇率情况：\n" + r_resp2
-
-    r_resp3 = fetch_data("/data/gold")
-    if r_resp3 and "失败" not in r_resp3:
-        content += "\n\n今日黄金汇率情况：\n" + r_resp3
+    for title, path, params in MARKET_SECTIONS:
+        text = fetch_data(path, params)
+        if text:
+            content += f"\n\n{title}\n{text}"
 
     asyncio.run(base_client.send_text(bot_id, room_id, '', content))
     if check_image_openable(moyu_file_path):
@@ -97,7 +101,7 @@ def notice_moyu_schedule(bot_id, room_id):
 
 
 def notice_usa_moyu_schedule(bot_id, room_id):
-    send_daily_notice(bot_id, room_id, "早上好☀️友友们~, \n现在国内太阳已经落下, 多赢阿美莉卡一天")
+    send_daily_notice(bot_id, room_id, US_MORNING)
 
 
 _download_lock = threading.Lock()
