@@ -20,6 +20,7 @@ session:
 platform_key:
   litellm_api_key: ""           # LiteLLM 代理 API key（聊天/图像通用）
   litellm_base_url: ""          # LiteLLM 代理地址
+  firecrawl_api_key: ""         # Firecrawl key，读链接正文用（公众号直接请求，不用它）
 
 # ==================== 外部服务配置 ====================
 

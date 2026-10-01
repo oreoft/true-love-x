@@ -24,7 +24,7 @@ from true_love_common.chat_msg import ChatMsg
 from true_love_ai.core.session import get_session_manager
 from true_love_ai.llm.router import get_llm_router
 from true_love_ai.memory.memory_manager import get_user_context
-from true_love_ai.agent import skill_registry
+from true_love_ai.agent import link_reader, skill_registry
 
 LOG = logging.getLogger("AgentLoop")
 
@@ -292,18 +292,7 @@ class AgentLoop:
 
     @staticmethod
     def _crawl_content(url: str) -> str:
-        if not url:
-            return ""
-        try:
-            from true_love_common.http.client import get
-            request_url = "https://www.textise.net/showtext.aspx?strURL=" + url
-            headers = {"User-Agent": "PostmanRuntime/7.40.0"}
-            response = get(request_url, headers=headers, timeout=30)
-            content = response.text
-            content = re.sub(r"\(http.*?\)", "", content)
-            return content.replace("[]", "").replace("\n\n", "\n").strip()[:3000]
-        except Exception:
-            return ""
+        return link_reader.read(url)
 
 
 # 全局单例
