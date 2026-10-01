@@ -486,6 +486,30 @@ class WxAutoClient():
                  len(groups), len(muted), len(already), failed)
         return {"total": len(groups), "muted": muted, "already": already, "failed": failed}
 
+    def accept_new_friends(self) -> list[str]:
+        """
+        通过通讯录里所有待通过的好友申请，最后切回聊天页
+
+        Returns:
+            通过了的申请（申请条目上的文字，含昵称和验证消息）
+        """
+        accepted = []
+        _init_uia_in_thread()
+        with ui_transaction():
+            try:
+                for request in self.wx.GetNewFriends(acceptable=True) or []:
+                    text = str(getattr(request, "content", "") or "")
+                    try:
+                        request.accept()
+                        accepted.append(text)
+                    except Exception:
+                        LOG.exception("Failed to accept friend request [%s]", text)
+            finally:
+                self.wx.SwitchToChat()
+        if accepted:
+            LOG.info("Accepted %d friend requests: %s", len(accepted), accepted)
+        return accepted
+
     def _wait_muted(self, name: str, seconds: float = 3.0) -> bool:
         """设完免打扰后会话列表要过一会儿才显示出来，等它变过来"""
         deadline = time.monotonic() + seconds

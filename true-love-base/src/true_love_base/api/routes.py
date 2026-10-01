@@ -166,27 +166,27 @@ async def add_listen(request: dict[str, Any] | None = Body(default=None)) -> dic
         return ApiResponse.error(107, f"AddListenChat failed: {str(e)}").to_dict()
 
 
-@router.post("/listen/private-poll")
-async def set_private_poll(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
+@router.post("/settings")
+async def apply_settings(request: dict[str, Any] | None = Body(default=None)) -> dict[str, Any]:
     """
-    打开或关闭私聊轮询：没开子窗口的私聊靠主窗口红点来收
+    打开或关闭功能开关，只改请求里带了的
 
     开关存在 server，后台改了以后通知 base 立即生效；base 下次连上微信时也会从 server 取。
 
     Request Body:
-        - enabled: 是否打开
+        - private_poll: 私聊轮询，没开子窗口的私聊靠主窗口红点来收（可选）
+        - auto_accept_friends: 自动通过好友申请（可选）
 
     Response:
-        - data: {"enabled": bool}
+        - data: 各项开关现在的状态
     """
     robot = _get_robot()
     if robot is None:
         return ApiErrors.ROBOT_NOT_READY.to_dict()
-    enabled = _payload(request).get("enabled")
-    if not isinstance(enabled, bool):
+    switches = _payload(request)
+    if not switches or not all(isinstance(value, bool) for value in switches.values()):
         return ApiErrors.INVALID_PARAMS.to_dict()
-    robot.private_poller.set_enabled(enabled)
-    return ApiResponse.success({"enabled": robot.private_poller.enabled}).to_dict()
+    return ApiResponse.success(robot.apply_switches(switches)).to_dict()
 
 
 @router.post("/groups/mute-all")

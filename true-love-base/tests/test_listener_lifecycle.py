@@ -19,9 +19,9 @@ def module(name, **attributes):
     return result
 
 
-def setup(chats, private_poll=False):
+def setup(chats, **switches):
     """server 返回的监听设置"""
-    return types.SimpleNamespace(chats=chats, private_poll=private_poll)
+    return types.SimpleNamespace(chats=chats, switches=switches)
 
 
 def load_source(name, path):
@@ -101,6 +101,8 @@ class ListenerLifecycleTests(unittest.TestCase):
         )
         self.poller_module = load_source("lifecycle_poller", "services/private_poller.py")
         sys.modules["true_love_base.services.private_poller"] = self.poller_module
+        self.acceptor_module = load_source("lifecycle_acceptor", "services/friend_acceptor.py")
+        sys.modules["true_love_base.services.friend_acceptor"] = self.acceptor_module
         self.robot_module = load_source("lifecycle_robot", "services/robot.py")
         sys.modules["true_love_base.services.robot"] = self.robot_module
         sys.modules["true_love_base.services.wx_supervisor"] = load_source(
@@ -204,7 +206,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.sdk.AddListenChat.side_effect = register
         result = robot.load_listen_chats(stop_event=stopped)
 
-        self.assertEqual(result, {"success": ["first"], "failed": [], "unavailable": False, "private_poll": False})
+        self.assertEqual(result, {"success": ["first"], "failed": [], "unavailable": False, "switches": {"private_poll": False, "auto_accept_friends": False}})
         self.assertEqual([call.args[0] for call in self.sdk.AddListenChat.call_args_list], ["first"])
 
     def test_startup_cancellation_stops_registration_retries(self):
@@ -229,7 +231,7 @@ class ListenerLifecycleTests(unittest.TestCase):
 
         result = robot.load_listen_chats(stop_event=threading.Event())
 
-        self.assertEqual(result, {"success": [], "failed": [], "unavailable": True, "private_poll": False})
+        self.assertEqual(result, {"success": [], "failed": [], "unavailable": True, "switches": {"private_poll": False, "auto_accept_friends": False}})
         self.sdk.AddListenChat.assert_not_called()
 
     def test_listeners_are_registered_in_the_order_the_server_returns(self):
@@ -241,7 +243,7 @@ class ListenerLifecycleTests(unittest.TestCase):
         result = robot.load_listen_chats(stop_event=stop)
 
         self.server.fetch_listen_chats.assert_called_once_with(stop)
-        self.assertEqual(result, {"success": ["first", "second"], "failed": [], "unavailable": False, "private_poll": False})
+        self.assertEqual(result, {"success": ["first", "second"], "failed": [], "unavailable": False, "switches": {"private_poll": False, "auto_accept_friends": False}})
         self.assertEqual([call.args[0] for call in self.sdk.AddListenChat.call_args_list], ["first", "second"])
 
     def test_listener_is_not_registered_when_its_chat_window_never_opened(self):
@@ -293,7 +295,7 @@ class ListenerLifecycleTests(unittest.TestCase):
             if cancel_loading:
                 shutdown.is_set.return_value = True
             if unavailable:
-                return {"success": [], "failed": [], "unavailable": True, "private_poll": False}
+                return {"success": [], "failed": [], "unavailable": True, "switches": {"private_poll": False, "auto_accept_friends": False}}
             return {"success": ["group"], "failed": [], "unavailable": False}
 
         robot.load_listen_chats.side_effect = load
@@ -487,16 +489,62 @@ class ListenerLifecycleTests(unittest.TestCase):
         self.assertFalse(poller._thread.is_alive())
         self.assertTrue(client.next_private_messages.called)
 
-    def test_server_setting_turns_the_private_poll_on(self):
-        self.server.fetch_listen_chats.return_value = setup(["first"], private_poll=True)
+    def test_server_switches_turn_features_on_and_unknown_or_missing_ones_off(self):
+        self.server.fetch_listen_chats.return_value = setup(["first"], private_poll=True, someday=True)
         robot = self.robot_module.Robot(self.client)
         self.addCleanup(robot.cleanup)
         robot.private_poller.set_enabled = Mock()
+        robot.friend_acceptor.set_enabled = Mock()
 
-        result = robot.load_listen_chats(stop_event=threading.Event())
+        robot.load_listen_chats(stop_event=threading.Event())
 
         robot.private_poller.set_enabled.assert_called_once_with(True)
-        self.assertTrue(result["private_poll"])
+        robot.friend_acceptor.set_enabled.assert_called_once_with(False)
+
+    def test_switches_pushed_by_the_server_change_only_what_they_name(self):
+        robot = self.robot_module.Robot(self.client)
+        self.addCleanup(robot.cleanup)
+        robot.friend_acceptor._interval = 3600
+        self.sdk.GetNewFriends.return_value = []
+
+        state = robot.apply_switches({"auto_accept_friends": True, "someday": True})
+
+        self.assertEqual(state, {"private_poll": False, "auto_accept_friends": True})
+
+    # ==================== 自动通过好友申请 ====================
+
+    def test_pending_friend_requests_are_accepted_and_the_chat_page_comes_back(self):
+        pending = [Mock(content="alice hi"), Mock(content="bob hello")]
+        pending[1].accept.side_effect = RuntimeError("button gone")
+        self.sdk.GetNewFriends.return_value = pending
+
+        with self.assertLogs("WxAutoClient", level="INFO"):
+            self.assertEqual(self.client.accept_new_friends(), ["alice hi"])
+
+        self.sdk.GetNewFriends.assert_called_once_with(acceptable=True)
+        self.sdk.SwitchToChat.assert_called_once_with()
+
+    def test_master_hears_who_was_accepted(self):
+        robot = self.robot_module.Robot(self.client, master_of=lambda bot_id: "owner")
+        self.addCleanup(robot.cleanup)
+        robot.send_text_msg = Mock(return_value=True)
+        client = Mock(**{"is_connected.return_value": True, "accept_new_friends.return_value": ["alice hi"]})
+        acceptor = self.acceptor_module.FriendAcceptor(client, robot._announce_new_friends)
+        acceptor._enabled = True
+
+        acceptor._accept_once()
+
+        robot.send_text_msg.assert_called_once_with("已自动通过 1 个好友申请：\n  1. alice hi", "owner")
+
+    def test_acceptor_does_not_touch_wechat_when_disabled_or_offline(self):
+        client = Mock(**{"is_connected.return_value": False})
+        acceptor = self.acceptor_module.FriendAcceptor(client, Mock())
+
+        acceptor._accept_once()
+        acceptor._enabled = True
+        acceptor._accept_once()
+
+        client.accept_new_friends.assert_not_called()
 
     # ==================== 一键群免打扰 ====================
 

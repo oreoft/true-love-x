@@ -16,6 +16,7 @@ from typing import Callable, Optional
 from true_love_common.chat_msg import ChatMsg
 from true_love_base.core import WxAutoClient
 from true_love_base.services import server_client
+from true_love_base.services.friend_acceptor import FriendAcceptor
 from true_love_base.services.private_poller import PrivatePoller
 
 
@@ -58,8 +59,10 @@ class Robot:
         # 每个 chat_id 一个锁，保证同一聊天内消息顺序
         self._chat_locks: dict[str, threading.Lock] = defaultdict(threading.Lock)
 
-        # 没开子窗口的私聊靠主窗口红点轮询来收，开关随监听列表从 server 取
+        # 功能开关随监听列表从 server 取，后台改了会推过来：
+        # 没开子窗口的私聊靠主窗口红点轮询来收；自动通过好友申请
         self.private_poller = PrivatePoller(client, self.on_message)
+        self.friend_acceptor = FriendAcceptor(client, self._announce_new_friends)
 
         self.LOG.info(f"Robot initialized, max_workers: {self.MAX_WORKERS}")
 
@@ -197,21 +200,21 @@ class Robot:
         self, *, stop_event: threading.Event
     ) -> dict:
         """
-        向 server 取监听设置，开始监听并按开关启停私聊轮询；取不到时一个都不监听，也不轮询
+        向 server 取监听设置，开始监听并按开关启停各项功能；取不到时一个都不监听，开关保持原样
 
         Returns:
             包含成功和失败列表的字典:
             - success: 成功监听的聊天列表
             - failed: 监听失败的聊天列表
             - unavailable: 没从 server 取到监听列表时为 True
-            - private_poll: 私聊轮询是否开着
+            - switches: 各项功能开关现在的状态
         """
         setup = server_client.fetch_listen_chats(stop_event)
         if setup is None:
-            return {"success": [], "failed": [], "unavailable": True, "private_poll": self.private_poller.enabled}
+            return {"success": [], "failed": [], "unavailable": True, "switches": self.switches()}
         chats = setup.chats
-        self.private_poller.set_enabled(setup.private_poll)
-        self.LOG.info(f"Loading {len(chats)} listen chats from server, private poll: {setup.private_poll}")
+        self.apply_switches({name: setup.switches.get(name, False) for name in self._switchable()})
+        self.LOG.info(f"Loading {len(chats)} listen chats from server, switches: {self.switches()}")
 
         success = []
         failed = []
@@ -234,7 +237,37 @@ class Robot:
             else:
                 failed.append(chat_name)
 
-        return {"success": success, "failed": failed, "unavailable": False, "private_poll": setup.private_poll}
+        return {"success": success, "failed": failed, "unavailable": False, "switches": self.switches()}
+
+    # ==================== 功能开关 ====================
+
+    def _switchable(self) -> dict:
+        return {"private_poll": self.private_poller, "auto_accept_friends": self.friend_acceptor}
+
+    def switches(self) -> dict[str, bool]:
+        """各项功能开关现在的状态"""
+        return {name: feature.enabled for name, feature in self._switchable().items()}
+
+    def apply_switches(self, switches: dict[str, bool]) -> dict[str, bool]:
+        """
+        打开或关闭功能，不认识的开关忽略
+
+        Returns:
+            各项功能开关现在的状态
+        """
+        features = self._switchable()
+        for name, enabled in switches.items():
+            if name in features:
+                features[name].set_enabled(bool(enabled))
+        return self.switches()
+
+    def _announce_new_friends(self, requests: list[str]) -> None:
+        """自动通过了好友申请后告诉管理员"""
+        if not self.master:
+            return
+        lines = "\n".join(f"  {i + 1}. {text}" for i, text in enumerate(requests))
+        if not self.send_text_msg(f"已自动通过 {len(requests)} 个好友申请：\n{lines}", self.master):
+            self.LOG.warning("Friend acceptance notice was not delivered to [%s]", self.master)
 
     def cleanup(self) -> None:
         """
@@ -243,6 +276,7 @@ class Robot:
         关闭线程池，等待所有任务完成。
         """
         self.private_poller.stop()
+        self.friend_acceptor.stop()
         # SDK callbacks already in flight may arrive after StopListening returns.
         with self._submission_lock:
             self._accepting_messages = False

@@ -175,30 +175,31 @@ async def listen_reset_all(bot_id: str, request: dict = Body(default={})):
 
 @admin_bot_router.get("/{bot_id}/listen/settings")
 async def listen_settings(bot_id: str):
-    """收消息的开关：private_poll 是否轮询没开子窗口的私聊"""
-    bot = deps.wechat_bot(bot_id)
-    return ApiResponse(data={"private_poll": bot_settings.get_bool(bot.bot_id, bot_settings.PRIVATE_POLL)})
+    """功能开关：private_poll 私聊轮询，auto_accept_friends 自动通过好友申请"""
+    return ApiResponse(data=bot_settings.wechat_switches(deps.wechat_bot(bot_id).bot_id))
 
 
-@admin_bot_router.post("/{bot_id}/listen/private-poll")
-async def listen_private_poll(bot_id: str, request: dict):
+@admin_bot_router.post("/{bot_id}/listen/settings")
+async def listen_save_settings(bot_id: str, request: dict):
     """
-    打开或关闭私聊轮询：先存下来，再通知 base 立即生效；base 离线时等它下次连上微信再取
+    改功能开关：先存下来，再通知 base 立即生效；base 离线时等它下次连上微信再取
 
     Body:
-        - enabled: 是否打开
+        - 要改的开关，如 {"private_poll": true}
 
     Returns:
-        - private_poll: 存下来的开关
+        - settings: 存下来的全部开关
         - applied: base 是否已经生效
     """
     bot = deps.wechat_bot(bot_id)
-    enabled = request.get("enabled")
-    if not isinstance(enabled, bool):
-        raise ValidationException("enabled 要是 true 或 false")
-    bot_settings.set_bool(bot.bot_id, bot_settings.PRIVATE_POLL, enabled)
-    result = await base_client.wechat(bot.bot_id).set_private_poll(enabled)
-    return ApiResponse(data={"private_poll": enabled, "applied": result.get("success", False)})
+    switches = {key: value for key, value in request.items() if key in bot_settings.WECHAT_SWITCHES}
+    if not switches or len(switches) != len(request) or not all(isinstance(v, bool) for v in switches.values()):
+        raise ValidationException(f"只能改这些开关，值要是 true 或 false：{', '.join(bot_settings.WECHAT_SWITCHES)}")
+    for key, value in switches.items():
+        bot_settings.set_bool(bot.bot_id, key, value)
+    result = await base_client.wechat(bot.bot_id).apply_settings(switches)
+    return ApiResponse(data={"settings": bot_settings.wechat_switches(bot.bot_id),
+                             "applied": result.get("success", False)})
 
 
 @admin_bot_router.post("/{bot_id}/listen/mute-all-groups")

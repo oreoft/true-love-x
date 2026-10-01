@@ -146,31 +146,34 @@ class ListenPageTests(ServerCase):
 
         self.assertEqual(data["summary"], {"healthy": 1, "unhealthy": 0})
 
-    def test_private_poll_is_saved_and_pushed_to_the_base(self):
+    def test_switch_is_saved_and_pushed_to_the_base(self):
         callback = self.register("wxid_ser")
-        self.bases.reply(f"{callback}/listen/private-poll", {"code": 0, "data": {"enabled": True}})
 
-        data = self.post("/admin/bots/wxid_ser/listen/private-poll", token=None, enabled=True)["data"]
+        data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, auto_accept_friends=True)["data"]
 
-        self.assertEqual(data, {"private_poll": True, "applied": True})
-        self.assertEqual(self.get("/admin/bots/wxid_ser/listen/settings")["data"], {"private_poll": True})
+        self.assertEqual(data, {"settings": {"private_poll": False, "auto_accept_friends": True}, "applied": True})
+        self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["auto_accept_friends"])
         [(url, payload)] = self.bases.sent()
-        self.assertEqual((url, payload), (f"{callback}/listen/private-poll", {"enabled": True}))
+        self.assertEqual((url, payload), (f"{callback}/settings", {"auto_accept_friends": True}))
 
-    def test_private_poll_is_saved_while_the_base_is_offline(self):
+    def test_switch_is_saved_while_the_base_is_offline(self):
         callback = self.register("wxid_ser")
-        self.bases.reply(f"{callback}/listen/private-poll", error=ConnectionError("base is down"))
+        self.bases.reply(f"{callback}/settings", error=ConnectionError("base is down"))
 
         with self.assertLogs("WeChatClient", level="ERROR"):
-            data = self.post("/admin/bots/wxid_ser/listen/private-poll", token=None, enabled=True)["data"]
+            data = self.post("/admin/bots/wxid_ser/listen/settings", token=None, private_poll=True)["data"]
 
-        self.assertEqual(data, {"private_poll": True, "applied": False})
+        self.assertEqual(data["applied"], False)
         self.assertTrue(self.get("/admin/bots/wxid_ser/listen/settings")["data"]["private_poll"])
 
-    def test_private_poll_needs_a_yes_or_no(self):
+    def test_only_known_yes_or_no_switches_are_accepted(self):
         self.register("wxid_ser")
 
-        self.assertNotEqual(self.post("/admin/bots/wxid_ser/listen/private-poll", token=None, enabled="yes")["code"], 0)
+        for body in ({"private_poll": "yes"}, {"someday": True}, {}):
+            with self.subTest(body=body):
+                self.assertNotEqual(
+                    self.post("/admin/bots/wxid_ser/listen/settings", token=None, **body)["code"], 0)
+        self.assertEqual(self.bases.sent(), [])
 
     def test_mute_all_groups_runs_on_the_base_of_the_chosen_bot(self):
         callback = self.register("wxid_ser")

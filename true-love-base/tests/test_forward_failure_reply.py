@@ -32,6 +32,9 @@ class ForwardFailureReplyTests(unittest.TestCase):
             "true_love_base.services.private_poller": module(
                 "true_love_base.services.private_poller", PrivatePoller=Mock()
             ),
+            "true_love_base.services.friend_acceptor": module(
+                "true_love_base.services.friend_acceptor", FriendAcceptor=Mock()
+            ),
         }
         modules = patch.dict(sys.modules, dependencies)
         modules.start()

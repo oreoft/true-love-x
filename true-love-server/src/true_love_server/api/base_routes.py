@@ -69,15 +69,12 @@ async def on_message(request: dict, background_tasks: BackgroundTasks):
 @base_router.post("/listen/list")
 async def listen_list(request: dict):
     """
-    微信 base 连上微信时来取要监听的群和好友，以及是否轮询没开子窗口的私聊
+    微信 base 连上微信时来取要监听的群和好友，以及功能开关（见 bot_settings.WECHAT_SWITCHES）
 
     Response:
-        - data: {"chats": [...], "private_poll": bool}
+        - data: {"chats": [...], "private_poll": bool, "auto_accept_friends": bool}
     """
     bot = _register(request)
     if not bot.can("listen"):
         raise ValidationException(f"机器人 {bot.bot_id} 是 {bot.platform}，没有监听功能")
-    return ApiResponse(data={
-        "chats": listen_store.list_all(bot.bot_id),
-        "private_poll": bot_settings.get_bool(bot.bot_id, bot_settings.PRIVATE_POLL),
-    })
+    return ApiResponse(data={"chats": listen_store.list_all(bot.bot_id), **bot_settings.wechat_switches(bot.bot_id)})

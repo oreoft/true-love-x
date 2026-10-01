@@ -53,7 +53,7 @@ export function botApi(botId) {
         listenResetAll: () => post(`${base}/listen/reset-all`),
         listenProbe: (chatName) => post(`${base}/listen/get-all-message`, { chat_name: chatName }),
         listenSettings: () => request(`${base}/listen/settings`),
-        listenPrivatePoll: (enabled) => post(`${base}/listen/private-poll`, { enabled }),
+        listenSaveSettings: (switches) => post(`${base}/listen/settings`, switches),
         listenMuteAllGroups: () => post(`${base}/listen/mute-all-groups`),
 
         reminders: () => request(`${base}/reminders`),
