@@ -5,18 +5,21 @@
 Session 对象只持有元数据（session_id / system_prompt / TTL），
 消息和摘要全部走 SQLite，不在内存中缓存。
 """
-import asyncio
 import logging
 import threading
 from datetime import datetime, timedelta
 from typing import Optional, Callable, Awaitable
+from true_love_ai.core.background import spawn
 from true_love_ai.core.db_engine import SessionLocal
 from true_love_ai.memory.dynamic_skill_repository import DynamicSkillRepository
 from true_love_ai.agent.skills.permission import check_permission
 from true_love_ai.core.config import get_config
 from true_love_ai.memory import persona_service
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("Session")
+
+# 压缩失败后多久内不再重试，免得每来一条消息都调一次压缩模型
+COMPRESS_RETRY_COOLDOWN = timedelta(minutes=10)
 
 
 def _load_dynamic_skill_hints(access: dict) -> str:
@@ -33,7 +36,7 @@ def _load_dynamic_skill_hints(access: dict) -> str:
                 visible.append(f"- {s.id}（{s.name}）: {s.description}")
         return "\n".join(visible)
     except Exception as e:
-        LOG.warning("加载动态技能列表失败: %s", e)
+        LOG.warning("加载动态技能列表失败: %s", e, exc_info=True)
         return ""
 
 
@@ -56,6 +59,8 @@ class Session:
         self._compress_keep_recent = compress_keep_recent
         self._compress_fn = compress_fn
         self._compressing = False
+        # 上次压缩失败后，到这个时间之前不再重试
+        self._compress_retry_at: Optional[datetime] = None
 
         self.updated_at = datetime.now()
 
@@ -71,12 +76,16 @@ class Session:
         repo.append_message(self.session_id, role, content)
 
         count = repo.count_messages(self.session_id)
-        if count >= self._compress_threshold and not self._compressing and self._compress_fn:
+        if count >= self._compress_threshold and self._should_compress():
             try:
-                loop = asyncio.get_running_loop()
-                loop.create_task(self._compress())
+                spawn(self._compress(), f"compress:{self.session_id}")
             except RuntimeError:
-                pass
+                LOG.warning("Session %s 不在事件循环里，这次跳过压缩", self.session_id)
+
+    def _should_compress(self) -> bool:
+        if self._compressing or not self._compress_fn:
+            return False
+        return self._compress_retry_at is None or datetime.now() >= self._compress_retry_at
 
     async def _compress(self):
         if self._compressing or not self._compress_fn:
@@ -102,11 +111,15 @@ class Session:
             new_summary = await self._compress_fn(
                 [{"role": "user", "content": "\n".join(lines)}]
             )
+            if not (new_summary or "").strip():
+                raise ValueError("压缩模型返回了空摘要")
 
             repo.compress(self.session_id, new_summary, keep)
+            self._compress_retry_at = None
             LOG.info("Session %s 压缩完成: %d → %d msgs", self.session_id, len(all_msgs), keep)
         except Exception as e:
-            LOG.error("Session %s 压缩失败: %s", self.session_id, e)
+            self._compress_retry_at = datetime.now() + COMPRESS_RETRY_COOLDOWN
+            LOG.exception("Session %s 压缩失败，%s 内不再重试: %s", self.session_id, COMPRESS_RETRY_COOLDOWN, e)
         finally:
             self._compressing = False
 

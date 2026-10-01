@@ -167,7 +167,7 @@ class MigrationTests(unittest.TestCase):
         self.conn.executemany("INSERT INTO dynamic_skills VALUES (?, ?)", [
             ("open_skill", None), ("locked_skill", '["lark:*", "*"]'),
         ])
-        with self.assertLogs("migrate", level="INFO"):
+        with self.assertLogs("Migrate", level="INFO"):
             migrate.migrate(self.conn)
 
         self.assertEqual(self.rows(), {

@@ -11,6 +11,16 @@ from typing import Callable, Awaitable
 
 LOG = logging.getLogger("SkillRegistry")
 
+
+class SkillFailed(Exception):
+    """
+    技能没办成。str(e) 是回给模型的话（沿用技能自己的语气），模型据此回复用户。
+
+    AgentLoop 会记日志（raise ... from e 时带上原异常的堆栈），这条消息的结局记成 tool_failed。
+    技能里别再自己 catch-all 后返回失败文案，要么直接抛原异常，要么包成这个。
+    """
+
+
 # {name: {"schema": {...}, "handler": async fn}}；谁能用存在库里（skill_access_service），代码里不写
 _skills: dict[str, dict] = {}
 

@@ -2,7 +2,7 @@
 """手动触发定时任务 Skill"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 from true_love_ai.agent.server_client import _async_post
 
 LOG = logging.getLogger("JobSkill")
@@ -40,4 +40,4 @@ async def run_job(params: dict, ctx: dict) -> str:
         if not count:
             return f"{job_name} 还没有配置定时任务，去后台的定时任务页加一个吧~"
         return f"好的~已触发 {job_name} 的 {count} 个定时任务，后台执行中~"
-    return f"触发失败：{result.get('message', result)}"
+    raise SkillFailed(f"触发失败：{result.get('message', '未知错误')}")

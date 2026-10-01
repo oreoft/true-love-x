@@ -9,6 +9,7 @@ AgentLoop 处理一条消息，最后一定落到下面某一种结局，发不�
     replied           模型正常给出回复                       → 发模型的回复
     skipped           自动触发时模型觉得没什么可说，回了 SKIP_MARKER → 不发
     empty_fallback    模型回了空                             → 发技能结果，没有就发兜底话
+    tool_failed       有技能失败了（抛异常、超时），模型据此回复     → 发模型的回复，模型回空就发技能结果或兜底话
     llm_error         调模型报错                             → 发兜底话
     too_many_rounds   技能调用轮次超上限                       → 发兜底话
     unreadable        消息里没有能交给模型的内容                 → 发兜底话
@@ -20,7 +21,7 @@ AgentLoop 处理一条消息，最后一定落到下面某一种结局，发不�
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Optional
+from typing import Optional, Sequence
 
 LOG = logging.getLogger("Outcome")
 
@@ -32,6 +33,7 @@ class Outcome(str, Enum):
     REPLIED = "replied"
     SKIPPED = "skipped"
     EMPTY_FALLBACK = "empty_fallback"
+    TOOL_FAILED = "tool_failed"
     LLM_ERROR = "llm_error"
     TOO_MANY_ROUNDS = "too_many_rounds"
     UNREADABLE = "unreadable"
@@ -40,6 +42,7 @@ class Outcome(str, Enum):
 
 FALLBACK_TEXT = {
     Outcome.EMPTY_FALLBACK: "嗯嗯，收到啦~",
+    Outcome.TOOL_FAILED: "呜呜~出了点小状况，稍后再试试吧~",
     Outcome.LLM_ERROR: "呜呜~出了点小状况，稍后再试试吧~",
     Outcome.TOO_MANY_ROUNDS: "处理超时了，稍后再试试吧~",
     Outcome.UNREADABLE: "抱歉，这种消息我暂时还不太看得懂呢~",
@@ -50,14 +53,17 @@ FALLBACK_TEXT = {
 @dataclass
 class Ending:
     outcome: Outcome
-    # replied 是模型的回复；empty_fallback 是最后一次技能的结果（可能为空）
+    # replied 是模型的回复；empty_fallback 是最后一次技能的结果（可能为空）；tool_failed 是模型的回复，回空时是技能结果
     text: str = ""
     detail: str = ""
 
 
-def from_model_reply(reply: Optional[str], last_tool_result: str, auto: bool) -> Ending:
-    """模型最后给出的文字落到哪种结局"""
+def from_model_reply(reply: Optional[str], last_tool_result: str, auto: bool,
+                     failed_tools: Sequence[str] = ()) -> Ending:
+    """模型最后给出的文字落到哪种结局；failed_tools 是这条消息里失败了的技能"""
     text = (reply or "").strip()
+    if failed_tools:
+        return Ending(Outcome.TOOL_FAILED, text=reply if text else last_tool_result, detail=",".join(failed_tools))
     if auto and SKIP_MARKER in text:
         return Ending(Outcome.SKIPPED, detail=text[:100])
     if not text:
@@ -71,7 +77,7 @@ def text_to_send(ending: Ending, auto: bool) -> Optional[str]:
         return ending.text
     if ending.outcome is Outcome.SKIPPED or auto:
         return None
-    if ending.outcome is Outcome.EMPTY_FALLBACK and ending.text:
+    if ending.outcome in (Outcome.EMPTY_FALLBACK, Outcome.TOOL_FAILED) and ending.text:
         return ending.text
     return FALLBACK_TEXT[ending.outcome]
 

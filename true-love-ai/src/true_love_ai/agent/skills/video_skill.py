@@ -2,7 +2,7 @@
 """视频生成 Skill（复用 AI 现有 video_service）"""
 import logging
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("VideoSkill")
 
@@ -39,20 +39,15 @@ async def generate_video(params: dict, ctx: dict) -> str:
     if not prompt:
         return "诶嘿~请告诉我你想要什么样的视频哦~"
 
+    from true_love_ai.services.video_service import GEN_VIDEO_DIR, VideoService
     try:
-        from true_love_ai.services.video_service import VideoService
         result = await VideoService().generate_video(content=prompt)
-
-        if result and result.video_id:
-            from true_love_ai.agent.server_client import send_file
-            from true_love_ai.services.video_service import GEN_VIDEO_DIR
-            ok = await send_file(receiver, f"{GEN_VIDEO_DIR.name}/{result.video_id}.mp4")
-            if ok:
-                return "好耶~视频已生成并发送！"
-            LOG.error("generate_video: send_file 返回失败 video_id=%s", result.video_id)
-            return "呜呜~视频生成好了但是发送失败了捏，稍后再试试吧~"
-
-        return "呜呜~视频生成失败了捏，稍后再试试吧~"
     except Exception as e:
-        LOG.error("generate_video error: %s", e)
-        return "呜呜~视频生成出错了捏~"
+        raise SkillFailed("呜呜~视频生成出错了捏~") from e
+    if not result or not result.video_id:
+        raise SkillFailed("呜呜~视频生成失败了捏，稍后再试试吧~")
+
+    from true_love_ai.agent.server_client import send_file
+    if not await send_file(receiver, f"{GEN_VIDEO_DIR.name}/{result.video_id}.mp4"):
+        raise SkillFailed("呜呜~视频生成好了但是发送失败了捏，稍后再试试吧~")
+    return "好耶~视频已生成并发送！"

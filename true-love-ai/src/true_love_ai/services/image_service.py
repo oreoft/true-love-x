@@ -13,7 +13,7 @@ from true_love_ai.models.response import ImageResponse
 GEN_IMG_DIR = Path("gen_img")
 GEN_IMG_DIR.mkdir(exist_ok=True)
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("ImageService")
 
 
 # 识图时加在用户问题前面的提示
@@ -42,7 +42,7 @@ class ImageService:
             return await self._generate(image_prompt, default_model)
         except Exception as e:
             if fallback_model:
-                LOG.warning("主力生图失败，降级备用模型 %s: %s", fallback_model, e)
+                LOG.warning("主力生图失败，降级备用模型 %s: %s", fallback_model, e, exc_info=True)
                 return await self._generate(image_prompt, fallback_model)
             raise
 
@@ -64,11 +64,13 @@ class ImageService:
         except Exception as e:
             err = str(e).lower()
             if "content_policy" in err or "safety" in err or "filtered" in err:
-                raise ValueError("生成失败啦! 内容太不堪入目了吧~")
+                LOG.warning("生图被内容审核拦截 model=%s prompt=%s: %s", model, prompt[:50], e)
+                raise ValueError("生成失败啦! 内容太不堪入目了吧~") from e
             if "timeout" in err:
-                raise ValueError("生成超时啦! 稍后再试试吧~")
-            LOG.error("生图异常 model=%s: %s", model, e)
-            raise ValueError("生成失败啦!")
+                LOG.warning("生图超时 model=%s: %s", model, e)
+                raise ValueError("生成超时啦! 稍后再试试吧~") from e
+            LOG.exception("生图异常 model=%s: %s", model, e)
+            raise ValueError("生成失败啦!") from e
 
     async def analyze_image(
             self,

@@ -51,7 +51,8 @@ async def analyze_speech(params: dict, ctx: dict) -> str:
         f"正在检索[{display_name}]最近的发言数据，看我稍后怎么评价...",
     ]
     from true_love_ai.agent.server_client import send_text as _send
-    await _send(receiver, random.choice(wait_msgs), at_user)
+    if not await _send(receiver, random.choice(wait_msgs), at_user):
+        LOG.warning("发言分析的安抚语没发出去: receiver=%s", receiver)
 
     # 从 Server 查询历史
     from true_love_ai.agent.skills._group_message import fetch_group_messages
@@ -83,20 +84,20 @@ async def analyze_speech(params: dict, ctx: dict) -> str:
     )
 
     # 后台提取记忆并写入 AI 本地 DB
-    import asyncio
-    asyncio.create_task(_extract_and_save_memory(answer, display_name, session_id))
+    from true_love_ai.core.background import spawn
+    spawn(_extract_and_save_memory(answer, display_name, session_id), "analyze_speech_memory")
 
     return answer
 
 
 async def _extract_and_save_memory(analysis_text: str, sender_id: str, group_id: str) -> None:
-    """后台从分析报告中提取结构化记忆并写入 AI SQLite"""
-    try:
-        from true_love_ai.services.chat_service import ChatService
-        facts = await ChatService().extract_memory_facts(analysis_text, sender_id)
-        if facts:
-            from true_love_ai.memory.memory_manager import upsert_user_memory
-            count = upsert_user_memory(group_id, sender_id, facts, source="analyze_speech")
+    """后台从分析报告中提取结构化记忆并写入 AI SQLite；异常由 spawn 记日志"""
+    from true_love_ai.services.chat_service import ChatService
+    facts = await ChatService().extract_memory_facts(analysis_text, sender_id)
+    if facts:
+        from true_love_ai.memory.memory_manager import upsert_user_memory
+        count = upsert_user_memory(group_id, sender_id, facts, source="analyze_speech")
+        if count < len(facts):
+            LOG.warning("记忆只写入了 %d/%d 条: sender_id=%s, group=%s", count, len(facts), sender_id, group_id)
+        else:
             LOG.info("记忆写入完成: %d 条, sender_id=%s, group=%s", count, sender_id, group_id)
-    except Exception as e:
-        LOG.error("提取记忆失败: %s", e)

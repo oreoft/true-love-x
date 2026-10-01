@@ -9,7 +9,7 @@ from openai import AsyncOpenAI
 
 from true_love_ai.core.model_registry import get_model_registry
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("LLMRouter")
 
 _openai_client: Optional[AsyncOpenAI] = None
 
@@ -27,6 +27,30 @@ def get_openai_client() -> AsyncOpenAI:
             api_key=cfg.platform_key.litellm_api_key,
         )
     return _openai_client
+
+
+def _parse_tool_call(tc) -> dict:
+    """
+    把模型的 tool call 转成 {id, name, arguments}
+
+    参数不是合法的 JSON 对象时不拿空参数去执行，带上 arguments_error，AgentLoop 把它当技能结果回给模型让它重来。
+    """
+    raw = tc.function.arguments or ""
+    call = {"id": tc.id, "name": tc.function.name, "arguments": {}}
+    if not raw.strip():
+        return call
+    try:
+        args = json.loads(raw)
+    except ValueError as e:
+        error = f"参数不是合法的 JSON: {e}"
+    else:
+        if isinstance(args, dict):
+            call["arguments"] = args
+            return call
+        error = f"参数应该是 JSON 对象，收到的是 {type(args).__name__}"
+    LOG.warning("tool %s 的参数解析失败: %s arguments=%s", tc.function.name, error, raw[:200])
+    call["arguments_error"] = error
+    return call
 
 
 class LLMRouter:
@@ -65,14 +89,7 @@ class LLMRouter:
         message = response.choices[0].message
 
         if message.tool_calls:
-            calls = []
-            for tc in message.tool_calls:
-                try:
-                    args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                except Exception:
-                    args = {}
-                calls.append({"id": tc.id, "name": tc.function.name, "arguments": args})
-            return "tool_calls", calls
+            return "tool_calls", [_parse_tool_call(tc) for tc in message.tool_calls]
 
         return "text", message.content or ""
 

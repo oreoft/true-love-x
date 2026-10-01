@@ -5,7 +5,7 @@ import logging
 import os
 import re
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("PajohnsSkill")
 
@@ -245,5 +245,4 @@ async def pajohns_order(params: dict, ctx: dict) -> str:
             return f"❌ 未知操作: {action}"
 
     except Exception as e:
-        LOG.exception("pajohns_order 执行失败: action=%s err=%s", action, e)
-        return f"❌ 操作失败（{action}）：{e}"
+        raise SkillFailed(f"❌ 操作失败（{action}）：{e}") from e

@@ -39,7 +39,7 @@ class DynamicSkillRepository:
             return True
         except Exception as e:
             self.session.rollback()
-            LOG.error("save dynamic skill 失败: id=%s err=%s", id, e)
+            LOG.exception("save dynamic skill 失败: id=%s err=%s", id, e)
             return False
 
     def get(self, id: str) -> DynamicSkill | None:
@@ -57,7 +57,7 @@ class DynamicSkillRepository:
                 self.session.commit()
         except Exception as e:
             self.session.rollback()
-            LOG.warning("increment_usage 失败: id=%s err=%s", id, e)
+            LOG.warning("increment_usage 失败: id=%s err=%s", id, e, exc_info=True)
 
     def delete(self, id: str) -> bool:
         try:
@@ -69,5 +69,5 @@ class DynamicSkillRepository:
             return True
         except Exception as e:
             self.session.rollback()
-            LOG.error("delete dynamic skill 失败: id=%s err=%s", id, e)
+            LOG.exception("delete dynamic skill 失败: id=%s err=%s", id, e)
             return False

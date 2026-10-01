@@ -17,7 +17,7 @@ from true_love_ai.core.model_registry import get_model_registry
 from true_love_ai.llm.router import get_llm_router
 from true_love_ai.models.response import VideoResponse
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("VideoService")
 
 GEN_VIDEO_DIR = Path("gen_video")
 GEN_VIDEO_DIR.mkdir(exist_ok=True)
@@ -52,7 +52,7 @@ class VideoService:
             return await self._generate_by_model(video_prompt, default_model, img_data_list)
         except Exception as e:
             if fallback_model:
-                LOG.warning("主力视频生成失败，降级备用模型 %s: %s", fallback_model, e)
+                LOG.warning("主力视频生成失败，降级备用模型 %s: %s", fallback_model, e, exc_info=True)
                 return await self._generate_by_model(video_prompt, fallback_model, img_data_list)
             raise
 

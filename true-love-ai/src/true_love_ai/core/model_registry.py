@@ -12,7 +12,7 @@ from typing import Optional
 from true_love_ai.core.db_engine import SessionLocal
 from true_love_ai.models.model_setting import ModelSetting
 
-LOG = logging.getLogger(__name__)
+LOG = logging.getLogger("ModelRegistry")
 
 # {类别: {key: 模型}}；default 是主力，fallback 是主力失败时的备用
 DEFAULT_MODELS: dict[str, dict[str, str]] = {

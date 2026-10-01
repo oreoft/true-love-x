@@ -3,7 +3,7 @@
 import logging
 import time
 
-from true_love_ai.agent.skill_registry import register_skill
+from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 
 LOG = logging.getLogger("ReminderSkill")
 
@@ -66,7 +66,7 @@ async def set_reminder(params: dict, ctx: dict) -> str:
             reply += "\n\n(诶，我看你还没设置所在地，刚才的推算是按北京时间瞎估的哦~ 如果人在其他时区可以告诉我，我会永远记住哒！)"
         return reply
 
-    return f"呜呜~提醒设置失败了: {result.get('msg', '未知错误')}"
+    raise SkillFailed(f"呜呜~提醒设置失败了: {result.get('message', '未知错误')}")
 
 
 @register_skill({
@@ -79,8 +79,11 @@ async def set_reminder(params: dict, ctx: dict) -> str:
 })
 async def query_reminder(params: dict, ctx: dict) -> str:
     receiver = ctx.get("receiver", "")
-    from true_love_ai.agent.server_client import query_reminders
-    jobs = await query_reminders(receiver)
+    from true_love_ai.agent.server_client import ServerCallFailed, query_reminders
+    try:
+        jobs = await query_reminders(receiver)
+    except ServerCallFailed as e:
+        raise SkillFailed("呜呜~查询提醒失败了，稍后再试试吧~") from e
     if not jobs:
         return "暂未查到你在这个聊天中的待办提醒记录哦~"
     lines = [f"【{j['job_id']}】执行时间: {j['next_run_time']}" for j in jobs]
@@ -109,8 +112,10 @@ async def delete_reminder(params: dict, ctx: dict) -> str:
     if not job_id:
         return "呜呜~不提供任务ID的话，我不知道你要删哪个呢~"
     from true_love_ai.agent.server_client import delete_reminder as _del
-    ok = await _del(job_id)
-    return "好耶~已成功删除对应的提醒记录！" if ok else "呜呜~没找到指定的提醒任务，是不是已经过期或者已被删除啦？"
+    result = await _del(job_id)
+    if result.get("code") == 0:
+        return "好耶~已成功删除对应的提醒记录！"
+    raise SkillFailed(f"呜呜~删除提醒失败了: {result.get('message', '未知错误')}")
 
 
 @register_skill({
@@ -179,4 +184,4 @@ async def update_reminder(params: dict, ctx: dict) -> str:
             parts.append(f"内容改为「{new_content}」")
         return f"好耶~提醒已更新！{'，'.join(parts)}~"
 
-    return f"呜呜~修改失败了: {result.get('msg', '未知错误')}"
+    raise SkillFailed(f"呜呜~修改失败了: {result.get('message', '未知错误')}")
