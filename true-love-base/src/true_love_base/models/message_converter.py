@@ -91,8 +91,7 @@ def convert_message(raw_msg: Any, chat_name: str, *, bot_id: str = "", bot_name:
             )
 
         elif msg_type == 'link':
-            url = raw_msg.get_url() if hasattr(raw_msg, 'get_url') else None
-            msg.link_msg = LinkMsg(url=url)
+            msg.link_msg = LinkMsg(url=_get_url(raw_msg))
 
         elif msg_type == 'quote':
             msg.refer_msg = _build_refer_msg(raw_msg, chat_name, is_group)
@@ -149,6 +148,17 @@ def _to_text(raw_msg: Any) -> Optional[str]:
         return raw_msg.to_text()
     except Exception as e:
         LOG.warning(f"Voice to_text failed: {e}")
+        return None
+
+
+def _get_url(raw_msg: Any) -> Optional[str]:
+    """SDK 要点开文章、在内置浏览器里找菜单按钮复制链接，经常超时；失败就不带 url，消息照常按群/私聊转出去"""
+    if not hasattr(raw_msg, 'get_url'):
+        return None
+    try:
+        return raw_msg.get_url()
+    except Exception as e:
+        LOG.warning(f"Link get_url failed: {e}")
         return None
 
 
