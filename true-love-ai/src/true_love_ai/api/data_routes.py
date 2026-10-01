@@ -2,7 +2,8 @@
 """
 Data Routes - 数据查询接口
 
-供 Server 侧定时 Jobs 调用，返回结构化数据（汇率、金价等）。
+供 Server 侧定时 Jobs 调用（早报里的汇率、金价）。
+查到了 text 是数据，查不到 text 是空串，调用方只看有没有内容，不认文案。
 """
 
 import logging
@@ -29,9 +30,10 @@ async def get_currency(currency: str, token: str = ""):
     if not verify_token(token):
         return APIResponse.token_error()
 
-    from true_love_ai.agent.skills.currency_skill import currency_query
-    result = await currency_query({"currency": currency}, {})
-    return APIResponse.success({"text": result})
+    from true_love_ai.agent.skills.currency_skill import CURRENCY_MAP, fetch_currency
+    currency_cn = CURRENCY_MAP.get(currency.strip().lower())
+    result = await fetch_currency(currency_cn) if currency_cn else None
+    return APIResponse.success({"text": result or ""})
 
 
 @data_router.get("/gold")
@@ -45,6 +47,6 @@ async def get_gold(token: str = ""):
     if not verify_token(token):
         return APIResponse.token_error()
 
-    from true_love_ai.agent.skills.gold_skill import gold_price
-    result = await gold_price({}, {})
-    return APIResponse.success({"text": result})
+    from true_love_ai.agent.skills.gold_skill import fetch_gold
+    result = await fetch_gold()
+    return APIResponse.success({"text": result or ""})

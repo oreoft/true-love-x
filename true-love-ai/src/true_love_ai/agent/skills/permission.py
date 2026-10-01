@@ -7,6 +7,9 @@ ctx 里要有 platform、bot_id、sender_id、is_group、chat（群名，私聊�
 """
 from true_love_ai.memory import skill_access_service
 
+# 没有权限时回给模型的话，模型回空时会原样发给用户
+DENIED_TEXT = "诶嘿~这个功能你没有权限使用哦~"
+
 
 class PermissionDenied(Exception):
     pass
@@ -20,4 +23,4 @@ def check_permission(skill_name: str, ctx: dict) -> bool:
 def require_permission(skill_name: str, ctx: dict) -> None:
     """检查权限，无权限时抛 PermissionDenied。"""
     if not check_permission(skill_name, ctx):
-        raise PermissionDenied("诶嘿~这个功能你没有权限使用哦~")
+        raise PermissionDenied(DENIED_TEXT)

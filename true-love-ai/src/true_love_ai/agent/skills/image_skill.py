@@ -6,6 +6,10 @@ from true_love_ai.agent.skill_registry import register_skill
 
 LOG = logging.getLogger("ImageSkill")
 
+# 生成图和改图共用的结果
+SENT_TEXT = "好耶~图片已生成并发送！"
+SEND_FAILED_TEXT = "呜呜~图片生成好了但是发送失败了捏，稍后再试试吧~"
+
 
 @register_skill({
     "type": "function",
@@ -63,9 +67,9 @@ async def generate_image(params: dict, ctx: dict) -> str:
             (GEN_IMG_DIR / filename).write_bytes(base64.b64decode(result.img))
             ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}")
             if ok:
-                return "好耶~图片已生成并发送！"
+                return SENT_TEXT
             LOG.error("generate_image: send_file 返回失败 filename=%s", filename)
-            return "呜呜~图片生成好了但是发送失败了捏，稍后再试试吧~"
+            return SEND_FAILED_TEXT
 
         return "呜呜~图片生成失败了捏，稍后再试试吧~"
     except Exception as e:
@@ -205,9 +209,9 @@ async def edit_image(params: dict, ctx: dict) -> str:
         (GEN_IMG_DIR / filename).write_bytes(img_bytes)
         ok = await send_file(receiver, f"{GEN_IMG_DIR.name}/{filename}")
         if ok:
-            return "好耶~图片已生成并发送！"
+            return SENT_TEXT
         LOG.error("edit_image: send_file 返回失败 filename=%s", filename)
-        return "呜呜~图片生成好了但是发送失败了捏，稍后再试试吧~"
+        return SEND_FAILED_TEXT
 
     except Exception as e:
         LOG.error("edit_image error: %s", e)

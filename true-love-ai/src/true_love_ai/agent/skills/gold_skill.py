@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """中银积利金（黄金）价格查询 Skill"""
 import logging
+from typing import Optional
 
 from true_love_ai.agent.skill_registry import register_skill
 
@@ -19,6 +20,11 @@ LOG = logging.getLogger("GoldSkill")
     }
 })
 async def gold_price(params: dict, ctx: dict) -> str:
+    return await fetch_gold() or "呜呜~查询黄金价格失败了捏，稍后再试试吧~"
+
+
+async def fetch_gold() -> Optional[str]:
+    """查中银积利金的实时价格；查不到返回 None"""
     try:
         from true_love_common.http.client import async_post
         url = "https://openapi.boc.cn/unlogin/finance/query_market_price"
@@ -52,4 +58,4 @@ async def gold_price(params: dict, ctx: dict) -> str:
                 )
     except Exception as e:
         LOG.error("gold_price error: %s", e)
-    return "呜呜~查询黄金价格失败了捏，稍后再试试吧~"
+    return None

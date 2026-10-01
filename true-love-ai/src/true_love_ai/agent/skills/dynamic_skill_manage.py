@@ -12,7 +12,7 @@ import logging
 import re
 
 from true_love_ai.agent.skill_registry import register_skill
-from true_love_ai.agent.skills.permission import check_permission
+from true_love_ai.agent.skills.permission import DENIED_TEXT, check_permission
 from true_love_ai.memory import dynamic_skill_service as _ss
 from true_love_ai.memory import skill_access_service
 
@@ -141,7 +141,7 @@ async def skill_run(params: dict, ctx: dict) -> str:
         return f"未找到技能 '{skill_id}'，请检查 ID 是否正确"
 
     if not check_permission(skill_id, ctx):
-        return "诶嘿~这个技能你没有权限使用哦~"
+        return DENIED_TEXT
 
     # 执行前命令安全校验（防止历史数据绕过）
     blocked_reason = _ss.validate_command(skill["command"])

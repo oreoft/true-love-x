@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """汇率查询 Skill（中国银行外汇牌价）"""
 import logging
+from typing import Optional
 
 from true_love_ai.agent.skill_registry import register_skill
 
 LOG = logging.getLogger("CurrencySkill")
 
-_CURRENCY_MAP = {
+CURRENCY_MAP = {
     "美元": "美元", "usd": "美元",
     "澳币": "澳大利亚元", "澳元": "澳大利亚元", "aud": "澳大利亚元",
     "日元": "日元", "jpy": "日元",
@@ -36,10 +37,14 @@ _CURRENCY_MAP = {
 })
 async def currency_query(params: dict, ctx: dict) -> str:
     raw = params.get("currency", "").strip().lower()
-    currency_cn = _CURRENCY_MAP.get(raw) or _CURRENCY_MAP.get(raw.replace("汇率", "").strip())
+    currency_cn = CURRENCY_MAP.get(raw) or CURRENCY_MAP.get(raw.replace("汇率", "").strip())
     if not currency_cn:
         return "诶嘿~暂时只支持美元、澳币、日元的汇率查询哦~"
+    return await fetch_currency(currency_cn) or "呜呜~查询汇率失败了捏，稍后再试试吧~"
 
+
+async def fetch_currency(currency_cn: str) -> Optional[str]:
+    """查一种货币的中行牌价（currency_cn 是牌价表里的中文名）；查不到返回 None"""
     try:
         from true_love_common.http.client import async_get
         url = "https://www.boc.cn/sourcedb/whpj"
@@ -60,4 +65,4 @@ async def currency_query(params: dict, ctx: dict) -> str:
                     )
     except Exception as e:
         LOG.error("currency_query error: %s", e)
-    return "呜呜~查询汇率失败了捏，稍后再试试吧~"
+    return None
