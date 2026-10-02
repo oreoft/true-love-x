@@ -171,15 +171,22 @@ def on_server_down(callback: Optional[Callable[[], None]]) -> None:
 
 # ==================== API 函数 ====================
 
-def _post_chat(msg: ChatMsg, *, archive_only: bool = False) -> bool:
-    """把消息交给 server，返回 server 是否收下；失败时记日志、记熔断"""
-    try:
-        request = ChatRequest(token=config.http_token, bot=bot_info(), message=msg, archive_only=archive_only)
+class UnsendableMessage(Exception):
+    """消息本身转不成请求，重发也一样，不算 server 连不上"""
 
+
+def _post_chat(msg: ChatMsg, *, archive_only: bool = False) -> bool:
+    """把消息交给 server，返回 server 是否收下；失败时记日志、记熔断。消息转不成请求时抛 UnsendableMessage"""
+    try:
+        body = ChatRequest(token=config.http_token, bot=bot_info(), message=msg,
+                           archive_only=archive_only).to_json()
+    except Exception as e:
+        raise UnsendableMessage(f"{type(e).__name__}: {e}") from e
+    try:
         # 使用 HTTP client 发起请求（连接复用）
         response = post(
             CHAT_ENDPOINT,
-            data=request.to_json(),
+            data=body,
             timeout=(2, 10),
             client=_get_client(),
         )
@@ -209,12 +216,18 @@ def get_chat(msg: ChatMsg) -> str:
         msg: 消息对象
 
     Returns:
-        服务端接收成功返回空串；失败时返回给用户的提示，消息由调用方交给 retry_later
+        服务端接收成功返回空串；失败时返回给用户的提示，消息由调用方交给 retry_later。
+        消息转不成请求时打 error 后丢弃，也返回空串：补发和熔断都帮不上忙
     """
     if _circuit_breaker.is_open():
         LOG.warning("Circuit breaker is open, not forwarding: chat=%s msg_hash=%s", msg.chat_name, msg.msg_hash)
         return _get_error_message()
-    if _post_chat(msg):
+    try:
+        if _post_chat(msg):
+            return ""
+    except UnsendableMessage as e:
+        LOG.error("Dropped a message that cannot be sent to server: chat=%s msg_hash=%s: %s",
+                  msg.chat_name, msg.msg_hash, e)
         return ""
     return _get_error_message()
 
@@ -294,13 +307,19 @@ class RetryQueue:
                     if not self._items:
                         return True
                     item = self._items[0]
-                if not self._send(item.msg, archive_only=item.archive_only):
-                    return False
+                try:
+                    if not self._send(item.msg, archive_only=item.archive_only):
+                        return False
+                except UnsendableMessage as e:
+                    # 重发也一样，留着会挡住后面的消息
+                    LOG.error("Dropped a queued message that cannot be sent to server: chat=%s msg_hash=%s: %s",
+                              item.msg.chat_name, item.msg.msg_hash, e)
+                else:
+                    LOG.info("Resent to server: chat=%s msg_hash=%s after %.0fs",
+                             item.msg.chat_name, item.msg.msg_hash, self._clock() - item.queued_at)
                 with self._lock:
                     if self._items and self._items[0] is item:
                         self._items.popleft()
-                LOG.info("Resent to server: chat=%s msg_hash=%s after %.0fs",
-                         item.msg.chat_name, item.msg.msg_hash, self._clock() - item.queued_at)
 
     def stop(self) -> None:
         """base 关闭时停止补发，还没发出去的打 warning"""
