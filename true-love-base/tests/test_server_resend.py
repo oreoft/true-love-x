@@ -159,6 +159,35 @@ class ServerResendTests(unittest.TestCase):
 
         self.assertTrue(self.client.ChatRequest.call_args.kwargs["archive_only"])
 
+    def test_message_that_cannot_become_a_request_is_dropped_without_tripping_the_breaker(self):
+        self.client.ChatRequest.side_effect = TypeError("WxResponse.__init__() missing 1 required positional argument")
+
+        with self.assertLogs("ServerClient", level="ERROR") as logs:
+            for _ in range(5):
+                reply = self.client.get_chat(message(9))
+
+        self.assertEqual(reply, "")
+        self.assertEqual(self.client._circuit_breaker.fail_count, 0)
+        self.post.assert_not_called()
+        self.assertIn("h9", logs.output[0])
+
+    def test_unsendable_queued_message_does_not_block_the_ones_behind_it(self):
+        def send(msg, *, archive_only=False):
+            if msg.msg_hash == "h1":
+                raise self.client.UnsendableMessage("TypeError: bad field")
+            self.sent.append((msg.msg_hash, archive_only))
+            return True
+
+        queue = self.client.RetryQueue(send, clock=self.clock)
+        queue._thread = Mock()
+        with self.assertLogs("ServerClient", level="WARNING"):
+            queue.put(message(1))
+            queue.put(message(2))
+            self.assertTrue(queue.flush())
+
+        self.assertEqual(self.sent, [("h2", False)])
+        self.assertEqual(len(queue), 0)
+
 
 class ChatRequestTests(unittest.TestCase):
     def test_archive_only_is_sent_only_when_set(self):

@@ -160,10 +160,11 @@ def _to_text(raw_msg: Any) -> Optional[str]:
     if not hasattr(raw_msg, 'to_text'):
         return None
     try:
-        return raw_msg.to_text()
+        result = raw_msg.to_text()
     except Exception:
         LOG.warning("Voice to_text failed", exc_info=True)
         return None
+    return _text_or_none(result, "Voice to_text")
 
 
 def _get_url(raw_msg: Any) -> Optional[str]:
@@ -171,11 +172,26 @@ def _get_url(raw_msg: Any) -> Optional[str]:
     if not hasattr(raw_msg, 'get_url'):
         return None
     try:
-        return raw_msg.get_url()
+        result = raw_msg.get_url()
     except Exception as e:
         # 经常超时，原因看异常就够了
         LOG.warning("Link get_url failed: %s: %s", type(e).__name__, e)
         return None
+    return _text_or_none(result, "Link get_url")
+
+
+def _text_or_none(result: Any, action: str) -> Optional[str]:
+    """
+    SDK 失败时有时不抛异常，而是返回一个"失败"的 WxResponse；
+    它不能放进消息里：序列化时 dataclasses 会用一个参数重建它，抛 TypeError，消息就发不出去
+    """
+    if isinstance(result, str):
+        return result or None
+    if result:
+        LOG.warning("%s returned %s instead of text", action, type(result).__name__)
+    else:
+        LOG.warning("%s failed: %s", action, _failure_message(result))
+    return None
 
 
 def _expand_note(msg: ChatMsg, raw_msg: Any) -> None:
