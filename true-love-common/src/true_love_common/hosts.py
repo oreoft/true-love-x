@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 
 SERVER_HOST = "http://h-m8s:8088"
-AI_HOST = "http://h-ser:8088"
+AI_HOST = "http://ser-docker:8088"
 
 DEV_SERVER_HOST = "http://localhost:8078"
 DEV_AI_HOST = "http://localhost:8079"
