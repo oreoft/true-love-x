@@ -13,7 +13,7 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository_owner }}/true-love-ai
   
-  # ========== Windows 宿主机 Docker 部署配置 ==========
+  # ========== ser-docker（ser-pve 上的 Debian 虚拟机）部署配置 ==========
   SERVER_IP: ${{ secrets.SER_GW_HOST }}
   SERVER_PORT: 2233
   SERVER_USER: server
@@ -73,7 +73,7 @@ jobs:
           platforms: linux/amd64
 
   deploy:
-    name: Deploy to SER Windows Docker
+    name: Deploy to ser-docker
     runs-on: ubuntu-latest
     needs: build-and-push
     environment: production
@@ -108,32 +108,21 @@ jobs:
       - name: Deploy via SSH
         shell: bash
         run: |
-          ssh -o StrictHostKeyChecking=no -p "${{ env.SERVER_PORT }}" "${{ env.SERVER_USER }}@${{ env.SERVER_IP }}" << 'EOF'
-            $ErrorActionPreference = "Stop"
-            # Repos live on the SSH user's Desktop; ask Windows for it so the user name and OneDrive redirection don't matter
-            $desktop = [Environment]::GetFolderPath('Desktop')
-            Set-Location -Path (Join-Path $desktop 'true-love-n\true-love-ai')
+          ssh -o StrictHostKeyChecking=no -p "${{ env.SERVER_PORT }}" "${{ env.SERVER_USER }}@${{ env.SERVER_IP }}" bash -s << 'EOF'
+            set -euo pipefail
+            cd ~/true-love-n/true-love-ai
 
             git pull --ff-only
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
             # Move the uploaded config to where compose mounts it; failing here leaves the running container untouched
-            $configDir = Join-Path $desktop 'config-center\true-love-n\true-love-ai'
-            New-Item -ItemType Directory -Force -Path $configDir | Out-Null
-            Move-Item -Force -Path (Join-Path $HOME '.tl-config-true-love-ai.yaml') -Destination (Join-Path $configDir 'config.yaml')
+            mkdir -p ~/config-center/true-love-n/true-love-ai
+            mv -f ~/.tl-config-true-love-ai.yaml ~/config-center/true-love-n/true-love-ai/config.yaml
 
             docker compose pull
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
             # Recreate even when the image is unchanged so config-only deploys take effect
             docker compose up -d --force-recreate
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
             docker image prune -f
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
             docker compose ps
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           EOF
 
       - name: Notify - Success
