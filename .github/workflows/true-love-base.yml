@@ -126,17 +126,21 @@ jobs:
             Write-Host "Deployment script completed"
           EOF
 
-      - name: Notify - base Success
+      - name: Notify - Success
         if: success()
+        env:
+          ALERT_URL: ${{ secrets.ALERT_URL }}
+          ALERT_TOKEN: ${{ secrets.ALERT_TOKEN }}
+          TITLE: "${{ matrix.machine }} 上的 true-love-base 部署成功"
         run: |
-          curl --location ${{ secrets.TL_NOTIFY_PATH }} \
-          --header 'Content-Type: application/json' \
-          --data '{
-            "token": "${{ secrets.TL_NOTIFY_TOKEN }}",
-            "sendReceiver": "master",
-            "atReceiver": "",
-            "content": "${{ matrix.machine }} 上的 base 模块已经成功部署"
-          }' || echo "通知发送失败，但部署成功"
+          jq -n \
+            --arg title "$TITLE" \
+            --arg repo "$GITHUB_REPOSITORY（$GITHUB_REF_NAME · ${GITHUB_SHA::7}）" \
+            --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{source:"github", level:"info", title:$title, fields:{"仓库":$repo}, url:$url}' \
+          | curl -fsS -m 30 "$ALERT_URL" \
+              -H "Authorization: Bearer $ALERT_TOKEN" -H 'Content-Type: application/json' -d @- \
+          || echo "通知发送失败，但部署成功"
 
 
 ## 创建任务（任务不存在时部署会自动执行；需要管理员权限）

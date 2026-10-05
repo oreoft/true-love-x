@@ -19,9 +19,6 @@ env:
   SERVER_USER: server
   SERVER_SSH_KEY: ${{ secrets.SER_SSH_DOOR_KEY }}
   
-  # ========== 通知配置 ==========
-  NOTIFY_PATH: ${{ secrets.TL_NOTIFY_PATH }}
-  NOTIFY_TOKEN: ${{ secrets.TL_NOTIFY_TOKEN }}
 permissions:
   contents: read
   packages: write
@@ -127,24 +124,32 @@ jobs:
 
       - name: Notify - Success
         if: success()
+        env:
+          ALERT_URL: ${{ secrets.ALERT_URL }}
+          ALERT_TOKEN: ${{ secrets.ALERT_TOKEN }}
+          TITLE: "true-love-ai 部署成功"
         run: |
-          curl --location "${{ env.NOTIFY_PATH }}" \
-          --header 'Content-Type: application/json' \
-          --data "{
-            \"token\": \"${{ env.NOTIFY_TOKEN }}\",
-            \"sendReceiver\": \"master\",
-            \"atReceiver\": \"\",
-            \"content\": \"真爱粉ai模块(Docker)已经成功部署 🐳\"
-          }" || echo "通知发送失败，但部署成功"
+          jq -n \
+            --arg title "$TITLE" \
+            --arg repo "$GITHUB_REPOSITORY（$GITHUB_REF_NAME · ${GITHUB_SHA::7}）" \
+            --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{source:"github", level:"info", title:$title, fields:{"仓库":$repo}, url:$url}' \
+          | curl -fsS -m 30 "$ALERT_URL" \
+              -H "Authorization: Bearer $ALERT_TOKEN" -H 'Content-Type: application/json' -d @- \
+          || echo "通知发送失败，但部署成功"
 
       - name: Notify - Failure
         if: failure()
+        env:
+          ALERT_URL: ${{ secrets.ALERT_URL }}
+          ALERT_TOKEN: ${{ secrets.ALERT_TOKEN }}
+          TITLE: "true-love-ai 部署失败"
         run: |
-          curl --location "${{ env.NOTIFY_PATH }}" \
-          --header 'Content-Type: application/json' \
-          --data "{
-            \"token\": \"${{ env.NOTIFY_TOKEN }}\",
-            \"sendReceiver\": \"master\",
-            \"atReceiver\": \"\",
-            \"content\": \"⚠️ 真爱粉ai模块(Docker)部署失败，请检查\"
-          }" || echo "通知发送失败"
+          jq -n \
+            --arg title "$TITLE" \
+            --arg repo "$GITHUB_REPOSITORY（$GITHUB_REF_NAME · ${GITHUB_SHA::7}）" \
+            --arg url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{source:"github", level:"error", title:$title, fields:{"仓库":$repo}, url:$url}' \
+          | curl -fsS -m 30 "$ALERT_URL" \
+              -H "Authorization: Bearer $ALERT_TOKEN" -H 'Content-Type: application/json' -d @- \
+          || echo "通知发送失败"
