@@ -27,7 +27,7 @@ from .. import bot_registry
 LOG = logging.getLogger("BaseClient")
 
 __all__ = ["BaseClient", "WeChatClient", "NotSupported", "for_bot", "wechat",
-           "send_text", "send_file", "send_to_master"]
+           "send_text", "send_file", "send_to_master", "send_to_chat"]
 
 
 class NotSupported(ValueError):
@@ -77,4 +77,13 @@ async def send_to_master(bot_id: str, content: str) -> tuple[bool, str]:
         return await BaseClient(bot_registry.resolve(bot_id)).send_to_master(content)
     except Exception as e:
         LOG.warning("send_to_master via bot [%s] failed: %s", bot_id, e)
+        return False, str(e)
+
+
+async def send_to_chat(bot_id: str, receiver: str, content: str) -> tuple[bool, str]:
+    """按群名或联系人名发通知；bot_id 为空时用默认机器人"""
+    try:
+        return await BaseClient(bot_registry.resolve(bot_id)).send_text(receiver, "", content)
+    except Exception as e:
+        LOG.warning("send_to_chat via bot [%s] failed: %s", bot_id, e)
         return False, str(e)
