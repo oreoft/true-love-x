@@ -17,6 +17,10 @@ jobs:
   deploy:
     name: Deploy Base (${{ matrix.machine }})
     runs-on: ubuntu-latest
+    # One deploy per machine at a time; on m8s this queues behind the server deploy, which shares the checkout
+    concurrency:
+      group: deploy-${{ matrix.machine }}
+      cancel-in-progress: false
     environment: production
     # Each machine runs the WeChat account logged in there; base reads which one it is from the machine itself.
     # One failing machine does not stop the others.

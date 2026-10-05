@@ -69,6 +69,10 @@ jobs:
   deploy:
     name: Deploy to Win11
     runs-on: ubuntu-latest
+    # Shares the m8s checkout with the base deploy; take turns so two git pulls never race
+    concurrency:
+      group: deploy-m8s
+      cancel-in-progress: false
     needs: build
     environment: production
 
