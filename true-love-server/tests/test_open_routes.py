@@ -1,4 +1,4 @@
-"""Outside callers push notices to the master; without a bot they go out through the default bot, as before."""
+"""Outside callers push notices to the master or a named chat; without a bot they go out through the default bot."""
 
 import unittest
 
@@ -23,10 +23,19 @@ class SendMsgTests(ServerCase):
 
         self.assertEqual(self.bases.sent(), [(f"{ser}/send/text", {"is_master": True, "content": "deployed"})])
 
-    def test_push_to_anyone_else_or_without_content_is_refused(self):
+    def test_push_to_a_named_chat_goes_through_the_default_bot(self):
+        default = self.register(DEFAULT_BOT_ID)
+
+        response = self.post("/send-msg", sendReceiver="Ops Group", content="alert")
+
+        self.assertEqual(response["code"], 0)
+        self.assertEqual(self.bases.sent(), [(f"{default}/send/text",
+                                              {"sendReceiver": "Ops Group", "atReceiver": "", "content": "alert"})])
+
+    def test_push_without_receiver_or_content_is_refused(self):
         self.register(DEFAULT_BOT_ID)
 
-        self.assertNotEqual(self.post("/send-msg", sendReceiver="alice", content="hi")["code"], 0)
+        self.assertNotEqual(self.post("/send-msg", content="hi")["code"], 0)
         self.assertNotEqual(self.post("/send-msg", sendReceiver="master")["code"], 0)
         self.assertEqual(self.bases.sent(), [])
 

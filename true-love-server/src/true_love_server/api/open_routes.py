@@ -3,7 +3,7 @@
 Open Routes - 给外部调用方的接口
 
 - /ping、/health：存活检查
-- /send-msg：外部推送通知给管理员（部署结果等），不指定机器人时从默认机器人发，和合并前一样
+- /send-msg：外部推送通知（部署结果、告警等），发给管理员或指定的群 / 联系人；不指定机器人时从默认机器人发
 """
 
 import logging
@@ -39,11 +39,11 @@ async def send_msg(request: dict):
     """
     推送消息接口
 
-    供外部调用，给管理员推送通知（部署结果等）。接收者只能是 master，管理员具体是谁由机器人的 base 决定。
+    供外部调用推送通知（部署结果、告警等）。
 
     Body:
         - token:        鉴权 token
-        - sendReceiver: 固定为 "master"
+        - sendReceiver: "master" 发给管理员（具体是谁由机器人的 base 决定）；其他值按群名或联系人名发送
         - content:      消息内容
         - bot_id:       从哪个机器人发（可选），不传用默认机器人
     """
@@ -54,10 +54,14 @@ async def send_msg(request: dict):
     send_receiver = request.get('sendReceiver')
     content = request.get('content')
 
-    if send_receiver != MASTER or not content:
-        raise ValidationException("诶嘿~接收者没注册或者内容是空的呢，检查一下吧~")
+    if not send_receiver or not content:
+        raise ValidationException("诶嘿~接收者或者内容是空的呢，检查一下吧~")
 
-    success, error_msg = await base_client.send_to_master(request.get("bot_id") or "", content)
+    bot_id = request.get("bot_id") or ""
+    if send_receiver == MASTER:
+        success, error_msg = await base_client.send_to_master(bot_id, content)
+    else:
+        success, error_msg = await base_client.send_to_chat(bot_id, send_receiver, content)
 
     if not success:
         raise ValidationException(f"呜呜~消息发送失败了捏: {error_msg}")
