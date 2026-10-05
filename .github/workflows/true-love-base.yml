@@ -29,11 +29,15 @@ jobs:
             key_secret: M8S_SSH_DOOR_KEY
             user: admin
             port: 2233
+          # ser-win has no public entry; reach it through ser-docker, the one host with a public SSH port
           - machine: ser
-            host_secret: SER_GW_HOST
+            host_secret: SER_WIN_HOST
             key_secret: SER_SSH_DOOR_KEY
-            user: server
-            port: 2233
+            user: admin
+            port: 22
+            jump_host_secret: SER_GW_HOST
+            jump_user: server
+            jump_port: 2233
           - machine: gcp-win
             host_secret: GCP_WIN_HOST
             key_secret: GCP_WIN_SSH_KEY
@@ -44,6 +48,10 @@ jobs:
       SERVER_USER: ${{ matrix.user }}
       SERVER_PORT: ${{ matrix.port }}
       SERVER_SSH_KEY: ${{ secrets[matrix.key_secret] }}
+      # Empty for hosts reached directly
+      JUMP_HOST: ${{ matrix.jump_host_secret && secrets[matrix.jump_host_secret] || '' }}
+      JUMP_USER: ${{ matrix.jump_user }}
+      JUMP_PORT: ${{ matrix.jump_port }}
 
     steps:
       - name: Checkout
@@ -69,8 +77,12 @@ jobs:
       - name: Upload config
         shell: bash
         run: |
+          SSH_OPTS=(-o StrictHostKeyChecking=no)
+          if [ -n "$JUMP_HOST" ]; then
+            SSH_OPTS+=(-o "ProxyCommand=ssh -o StrictHostKeyChecking=no -p $JUMP_PORT -W %h:%p $JUMP_USER@$JUMP_HOST")
+          fi
           for i in 1 2 3; do
-            scp -q -o StrictHostKeyChecking=no -P "${{ env.SERVER_PORT }}" \
+            scp -q "${SSH_OPTS[@]}" -P "${{ env.SERVER_PORT }}" \
               config-center/true-love-n/true-love-base/config.yaml \
               "${{ env.SERVER_USER }}@${{ env.SERVER_IP }}:.tl-config-true-love-base.yaml" && exit 0
             echo "scp attempt $i failed; retrying"
@@ -83,7 +95,11 @@ jobs:
         run: |
           set -euo pipefail
           echo "SSH env ready"
-          ssh -o StrictHostKeyChecking=no -p ${{ env.SERVER_PORT }} ${{ env.SERVER_USER }}@${{ env.SERVER_IP }} << 'EOF'
+          SSH_OPTS=(-o StrictHostKeyChecking=no)
+          if [ -n "$JUMP_HOST" ]; then
+            SSH_OPTS+=(-o "ProxyCommand=ssh -o StrictHostKeyChecking=no -p $JUMP_PORT -W %h:%p $JUMP_USER@$JUMP_HOST")
+          fi
+          ssh "${SSH_OPTS[@]}" -p ${{ env.SERVER_PORT }} ${{ env.SERVER_USER }}@${{ env.SERVER_IP }} << 'EOF'
             $ErrorActionPreference = "Stop"
             $taskName = "UIA-TL-BASE"
             $repoRoot = Join-Path ([Environment]::GetFolderPath('Desktop')) 'true-love-n'
