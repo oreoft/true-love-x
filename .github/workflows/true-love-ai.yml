@@ -72,6 +72,10 @@ jobs:
   deploy:
     name: Deploy to ser-docker
     runs-on: ubuntu-latest
+    # Shares the ser-docker checkout with the nexu deploy; take turns so two git pulls never race
+    concurrency:
+      group: deploy-ser-docker
+      cancel-in-progress: false
     needs: build-and-push
     environment: production
 
