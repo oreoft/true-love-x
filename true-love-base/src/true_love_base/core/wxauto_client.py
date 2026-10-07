@@ -38,9 +38,9 @@ if _wx_imgs_dir:
 
 MessageCallback = Callable[[ChatMsg, str], None]
 
-# SendFiles / SendAudio 偶尔报失败但文件其实已经发出去了（m8s 上约一成）。
-# 报失败后最多等这么久，看监听有没有收到自己刚发出的这条消息，收到就按成功算
-SEND_CONFIRM_SECONDS = 10
+# SendFiles / SendAudio 常报失败但文件其实已经发出去了（m8s 上几乎每次）。
+# 报失败后最多等这么久，看监听有没有收到自己刚发出的这条消息，收到就按成功算；图片回显实测 7 到 14 秒
+SEND_CONFIRM_SECONDS = 25
 # 自己发出的文件在监听里的消息类型
 _SELF_MEDIA_TYPES = {"image", "file", "video", "voice"}
 # 拍一拍和引用要拿着原消息在聊天窗口里的那个对象去点右键菜单，所以收到的消息按 id 留一段时间
