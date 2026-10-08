@@ -31,7 +31,7 @@ LOG = logging.getLogger("AgentLoop")
 
 # 单次会话最大 tool 调用轮次（防止死循环）
 MAX_TOOL_ITERATIONS = 6
-# 单个 skill 执行超时（秒）
+# 单个 skill 执行超时（秒），skill 可以在 schema 里用 timeout 自己声明
 SKILL_TIMEOUT_SECONDS = 300
 # 自动触发时附在这条消息后面（只给这一次调用，不进会话历史），让模型没话说时可以不回
 AUTO_REPLY_RULE = (
@@ -324,12 +324,12 @@ class AgentLoop:
 
             result = await asyncio.wait_for(
                 skill_registry.execute(name, args, ctx),
-                timeout=SKILL_TIMEOUT_SECONDS,
+                timeout=skill_registry.get_timeout(name, SKILL_TIMEOUT_SECONDS),
             )
             LOG.info("tool %s 执行结果: %s", name, str(result)[:200])
             return str(result), False
         except asyncio.TimeoutError:
-            LOG.error("tool %s 执行超时 (%ds)", name, SKILL_TIMEOUT_SECONDS)
+            LOG.error("tool %s 执行超时 (%ds)", name, skill_registry.get_timeout(name, SKILL_TIMEOUT_SECONDS))
             return f"[执行超时] 技能 {name} 处理时间过长，请稍后重试", True
         except skill_registry.SkillFailed as e:
             # 包了原异常的带上堆栈；技能自己判定的失败（比如发送接口返回失败）原因已经在话里了

@@ -6,6 +6,7 @@ import base64
 import io
 import logging
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -27,6 +28,34 @@ _VIDEO_PROMPT_SYSTEM = (
 )
 
 
+# Omni 一次生成的最长秒数，更长的靠续拍；续拍每轮接 3~10 秒，按实际时长决定还要不要续
+OMNI_SEGMENT_SECONDS = 10
+OMNI_MAX_ROUNDS = 5
+# 续拍用官方推荐的短句；写长了模型会当成修改，重拍一条而不是往后接
+_OMNI_EXTEND = "Extend this video. The scene continues naturally. Keep everything else the same."
+
+
+@dataclass
+class VideoOptions:
+    """生成参数；技能没给的都用这里的默认值"""
+    seconds: int = 30
+    aspect_ratio: str = "9:16"
+    resolution: str = "720p"
+    dialogue: str = ""
+    previous_id: str = ""
+
+
+def _with_dialogue(prompt: str, dialogue: str) -> str:
+    if not dialogue:
+        return prompt
+    return f'{prompt}\nSpoken dialogue, say it word for word in its original language: "{dialogue}"'
+
+
+def _omni_video_uri(data: dict) -> str:
+    return next((c["uri"] for step in data.get("steps") or [] if step.get("type") == "model_output"
+                 for c in step.get("content") or [] if c.get("type") == "video" and c.get("uri")), "")
+
+
 class VideoService:
 
     def __init__(self):
@@ -46,17 +75,20 @@ class VideoService:
             self,
             content: str,
             img_data_list: Optional[list[str]] = None,
+            options: Optional[VideoOptions] = None,
     ) -> VideoResponse:
+        opts = options or VideoOptions()
         video_prompt = await self._build_prompt(content)
         default_model  = self.registry.get("video", "default")
         fallback_model = self.registry.get("video", "fallback")
 
         try:
-            return await self._generate_by_model(video_prompt, default_model, img_data_list)
+            return await self._generate_by_model(video_prompt, default_model, img_data_list, opts)
         except Exception as e:
-            if fallback_model:
+            # 在上一条视频上改只有 omni 能做，备用模型接不上
+            if fallback_model and not opts.previous_id:
                 LOG.warning("主力视频生成失败，降级备用模型 %s: %s", fallback_model, e, exc_info=True)
-                return await self._generate_by_model(video_prompt, fallback_model, img_data_list)
+                return await self._generate_by_model(video_prompt, fallback_model, img_data_list, opts)
             raise
 
     async def _build_prompt(self, content: str) -> str:
@@ -76,29 +108,35 @@ class VideoService:
             prompt: str,
             model: str,
             img_data_list: Optional[list[str]] = None,
+            opts: Optional[VideoOptions] = None,
     ) -> VideoResponse:
+        opts = opts or VideoOptions()
         is_img2video = bool(img_data_list)
-        LOG.info("生成视频: model=%s %s", model, "图生视频" if is_img2video else "文生视频")
+        LOG.info("生成视频: model=%s %s %s", model, "图生视频" if is_img2video else "文生视频", opts)
 
+        interaction_id = ""
         if "gemini-omni" in model:
-            video_bytes = await self._generate_by_omni(prompt, model, img_data_list)
+            video_bytes, interaction_id = await self._generate_by_omni(prompt, model, img_data_list, opts)
         else:
-            video_bytes = await self._generate_by_videos_api(prompt, model, img_data_list)
+            video_bytes = await self._generate_by_videos_api(prompt, model, img_data_list, opts)
 
         vid = str(uuid.uuid4())
         video_path = GEN_VIDEO_DIR / f"{vid}.mp4"
         video_path.write_bytes(video_bytes)
         LOG.info("视频完成: %s (%.2fMB)", video_path, len(video_bytes) / 1024 / 1024)
-        return VideoResponse(prompt=prompt, video_id=vid)
+        return VideoResponse(prompt=prompt, video_id=vid, interaction_id=interaction_id)
 
     async def _generate_by_videos_api(
             self,
             prompt: str,
             model: str,
             img_data_list: Optional[list[str]] = None,
+            opts: Optional[VideoOptions] = None,
     ) -> bytes:
-        """Veo / Sora：/v1/videos 建任务，轮询完成后下载"""
-        body: dict = {"model": model, "prompt": prompt, "size": "1280x720", "seconds": "8"}
+        """Veo / Sora：/v1/videos 建任务，轮询完成后下载；只认方向，时长固定 8 秒"""
+        opts = opts or VideoOptions()
+        size = "720x1280" if opts.aspect_ratio == "9:16" else "1280x720"
+        body: dict = {"model": model, "prompt": _with_dialogue(prompt, opts.dialogue), "size": size, "seconds": "8"}
         if img_data_list:
             mime_type, b64_data = self._detect_image(img_data_list[0])
             body["input_reference"] = {"bytesBase64Encoded": b64_data, "mimeType": mime_type}
@@ -118,50 +156,94 @@ class VideoService:
             prompt: str,
             model: str,
             img_data_list: Optional[list[str]] = None,
-    ) -> bytes:
+            opts: Optional[VideoOptions] = None,
+    ) -> tuple[bytes, str]:
         """Gemini Omni 不支持 /v1/videos，经 LiteLLM 的 Gemini 透传调 Interactions API。
-        同步返回视频文件地址（inline 上限 4MB，720p 的 10 秒视频会超），文件就绪后下载"""
-        if img_data_list:
+        一次最多 10 秒，更长的靠续拍：每轮带上一轮的 id，返回的是累计后的整条视频。
+        有 previous_id 时只做一轮，在那条视频上按 prompt 改。返回 (视频, 最后一轮的 id)"""
+        opts = opts or VideoOptions()
+        first = _with_dialogue(prompt, opts.dialogue)
+        if opts.previous_id:
+            first = f"{first} Keep everything else the same."
+        elif opts.seconds < OMNI_SEGMENT_SECONDS:
+            first = f"About {opts.seconds} seconds long. {first}"
+
+        if img_data_list and not opts.previous_id:
             mime_type, b64_data = self._detect_image(img_data_list[0])
             content = [
                 {"type": "image", "data": b64_data, "mime_type": mime_type},
-                {"type": "text", "text": prompt},
+                {"type": "text", "text": first},
             ]
         else:
-            content = prompt
-        body = {
+            content = first
+        data = await self._omni_turn(model, content, opts, opts.previous_id)
+        file_name, duration = await self._omni_file(data)
+
+        rounds = 1
+        while not opts.previous_id and duration < opts.seconds - 2 and rounds < OMNI_MAX_ROUNDS:
+            rounds += 1
+            LOG.info("Omni 续拍第 %d 轮: 当前 %.0f 秒，目标 %d 秒", rounds, duration, opts.seconds)
+            data = await self._omni_turn(model, _OMNI_EXTEND, opts, data["id"])
+            file_name, duration = await self._omni_file(data)
+        return await self._omni_download(file_name), data["id"]
+
+    async def _omni_turn(self, model: str, content, opts: VideoOptions, previous_id: str = "") -> dict:
+        body: dict = {
             "model": model.split("/", 1)[-1],
             "input": content,
-            "response_format": {"type": "video", "aspect_ratio": "16:9", "resolution": "720p", "delivery": "uri"},
+            "response_format": {"type": "video", "aspect_ratio": opts.aspect_ratio,
+                                "resolution": opts.resolution, "delivery": "uri"},
         }
+        if previous_id:
+            body["previous_interaction_id"] = previous_id
+        # 后台模式：先建任务再轮询。同步调用续拍一轮常超过 100 秒，会被 allm 前面的 Cloudflare 掐断（524）
+        body["background"] = True
         resp = await async_post(f"{self.base_url}/gemini/v1beta/interactions",
-                                headers=self._gemini_headers(), json=body, timeout=600.0)
+                                headers=self._gemini_headers(), json=body, timeout=60.0)
         self._raise_for_video_error(resp)
         data = resp.data if isinstance(resp.data, dict) else {}
+        interaction_id = data.get("id")
+        if not interaction_id:
+            raise ValueError("视频任务创建失败：未获取到 interaction id")
 
-        uri = next((c["uri"] for step in data.get("steps") or [] if step.get("type") == "model_output"
-                    for c in step.get("content") or [] if c.get("type") == "video" and c.get("uri")), None)
-        if not uri:
+        for attempt in range(120):
+            if data.get("status") != "in_progress":
+                break
+            await asyncio.sleep(5.0)
+            resp = await async_get(f"{self.base_url}/gemini/v1beta/interactions/{interaction_id}",
+                                   headers=self._gemini_headers(), timeout=30.0)
+            self._raise_for_video_error(resp)
+            data = resp.data if isinstance(resp.data, dict) else {}
+        else:
+            raise ValueError("视频生成超时，请稍后再试~")
+
+        if data.get("status") != "completed" or not _omni_video_uri(data):
             LOG.warning("Omni 没有返回视频: status=%s id=%s", data.get("status"), data.get("id"))
             raise ValueError("视频生成失败啦!")
-        file_name = uri.split("/v1beta/", 1)[1].split(":", 1)[0]  # files/xxx
-        LOG.info("Omni 视频已生成: %s", file_name)
+        data["id"] = interaction_id
+        return data
 
+    async def _omni_file(self, data: dict) -> tuple[str, float]:
+        """返回的是视频文件地址（inline 上限 4MB，720p 的 10 秒视频会超）；等文件就绪，返回 (files/xxx, 秒数)"""
+        file_name = _omni_video_uri(data).split("/v1beta/", 1)[1].split(":", 1)[0]
         for attempt in range(60):
             resp = await async_get(f"{self.base_url}/gemini/v1beta/{file_name}",
                                    headers=self._gemini_headers(), timeout=30.0)
             self._raise_for_video_error(resp)
-            state = resp.data.get("state", "") if isinstance(resp.data, dict) else ""
+            meta = resp.data if isinstance(resp.data, dict) else {}
+            state = meta.get("state", "")
             if state == "ACTIVE":
-                break
+                duration = str((meta.get("videoMetadata") or {}).get("videoDuration", "0")).rstrip("s")
+                LOG.info("Omni 视频已生成: %s (%s 秒)", file_name, duration)
+                return file_name, float(duration or 0)
             if state == "FAILED":
                 raise ValueError("视频生成失败啦!")
             await asyncio.sleep(2.0)
-        else:
-            raise ValueError("视频生成超时，请稍后再试~")
+        raise ValueError("视频生成超时，请稍后再试~")
 
+    async def _omni_download(self, file_name: str) -> bytes:
         resp = await async_get(f"{self.base_url}/gemini/v1beta/{file_name}:download?alt=media",
-                               headers=self._gemini_headers(), timeout=120.0)
+                               headers=self._gemini_headers(), timeout=300.0)
         self._raise_for_video_error(resp)
         return resp.content
 

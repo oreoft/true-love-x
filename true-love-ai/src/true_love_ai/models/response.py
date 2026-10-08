@@ -16,6 +16,7 @@ class VideoResponse(BaseModel):
     """视频生成响应"""
     prompt: str = Field(..., description="使用的 prompt")
     video_id: Optional[str] = Field(default=None, description="视频文件名（不含目录），路径为 gen_video/{video_id}.mp4")
+    interaction_id: str = Field(default="", description="Omni 这一轮的 id，在这条视频上接着改时传回去；其他模型为空")
 
 
 class AudioResponse(BaseModel):

@@ -64,6 +64,7 @@ def get_all_tool_schemas(ctx: dict) -> list[dict]:
             continue
         schema = copy.deepcopy(s["schema"])
         schema.pop("notify", None)
+        schema.pop("timeout", None)
         params = schema.get("function", {}).get("parameters", {})
         if isinstance(params.get("properties"), dict) and not params["properties"]:
             params.pop("properties", None)
@@ -80,6 +81,12 @@ def list_skills() -> list[dict]:
     """tl-admin 用：所有内置技能的名字和说明"""
     return [{"name": name, "description": s["schema"]["function"].get("description", "")}
             for name, s in sorted(_skills.items())]
+
+
+def get_timeout(name: str, default: int) -> int:
+    """skill 自己声明的执行超时（秒），没声明用 default"""
+    skill = _skills.get(name)
+    return skill["schema"].get("timeout", default) if skill else default
 
 
 def get_notify(name: str) -> str | None:
