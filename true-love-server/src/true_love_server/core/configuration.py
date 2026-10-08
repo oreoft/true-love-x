@@ -51,3 +51,5 @@ class Config:
             # 调用方没指定机器人时用哪个号（外部 /send-msg、server 启停通知、AI 通知管理员）
             self.DEFAULT_BOT_ID: str = str(yconfig.get("default_bot_id") or "").strip()
             self.LOKI: dict = loki_config
+            # 发给 base 的文件中转用的 R2 桶，见 true_love_common.r2
+            self.R2: dict = yconfig.get("r2") or {}

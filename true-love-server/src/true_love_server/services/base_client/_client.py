@@ -7,9 +7,9 @@ BaseClient - server 调 base 的统一协议
     POST {callback}/send/text   {"sendReceiver", "atReceiver", "content"} 或 {"is_master": true, "content"}
     POST {callback}/send/file   {"sendReceiver", "url"} 或 {"is_master": true, "url"}
     GET  {callback}/status      {"data": {"wx_online", "self_name", "since", "bot_id"}}
-    GET  {callback}/media/...   base 收到的媒体文件
+    GET  {callback}/media/...   base 收到的媒体文件（AI 回源下载）
 
-文件一律传 URL，由 base 自己下载；平台之间的能力差异（比如飞书只能发 URL）由各自的 base 消化。
+文件一律传 URL，由 base 自己下载（AI 和 server 的文件先传到 R2，给的是预签名链接）；平台之间的能力差异（比如飞书只能发 URL）由各自的 base 消化。
 管理员是谁只有 base 知道：发给管理员时传 is_master，不传接收者。
 返回体是 {"code": 0 表示成功, "message", "data"}。
 """
@@ -24,7 +24,7 @@ from ..bot_registry import BotRecord
 LOG = logging.getLogger("BaseClient")
 
 _TIMEOUT = (2, 10)
-_FILE_TIMEOUT = (2, 60)  # 发文件要先下载再操作客户端界面（含重试），比普通请求慢
+_FILE_TIMEOUT = (2, 180)  # 发文件要先下载再操作客户端界面（含重试），30 秒的视频十几 MB
 _STATUS_TIMEOUT = (2, 3)
 
 

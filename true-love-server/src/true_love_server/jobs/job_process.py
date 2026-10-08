@@ -16,11 +16,9 @@ from datetime import datetime
 import pytz
 from bs4 import BeautifulSoup
 from PIL import Image
-from pathlib import Path
 
-from true_love_common.hosts import server_host
 from true_love_common.http.client import get, post
-from true_love_common.media import to_url
+from true_love_common import r2
 
 from ..services import base_client
 from ..services.ai_client.business import fetch_data
@@ -31,7 +29,6 @@ alapi_config = _config.ALAPI
 LOG = logging.getLogger("JobProcess")
 
 # 摸鱼图、早报图的目录，通过 /media 开放给 base 下载后发送；所有机器人共用，一天只下载一次
-MEDIA_DIRS = [Path("moyu-jpg"), Path("zaobao-jpg")]
 
 # 默认网络请求超时时间（秒）
 DEFAULT_TIMEOUT = 60
@@ -65,8 +62,15 @@ def log_function_execution(func):
 
 
 def _send_img(bot_id: str, path: str, receiver: str) -> tuple[bool, str]:
-    """发 server 自己目录里的图片（path 相对工作目录），base 从 server 的 /media 下载"""
-    return asyncio.run(base_client.send_file(bot_id, to_url(path, server_host()), receiver))
+    """发 server 自己目录里的图片（path 相对工作目录）：先传到 R2，base 用预签名链接下载"""
+    async def send() -> tuple[bool, str]:
+        try:
+            url = await r2.upload(r2.R2Config.from_dict(_config.R2), path, "server")
+        except Exception as e:
+            LOG.error("图片上传 R2 失败: %s", path, exc_info=True)
+            return False, f"上传 R2 失败: {e}"
+        return await base_client.send_file(bot_id, url, receiver)
+    return asyncio.run(send())
 
 
 def send_daily_notice(bot_id, room_id, content=CN_MORNING):

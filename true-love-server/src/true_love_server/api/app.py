@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from true_love_common.integrations.fastapi import HttpLoggingMiddleware
-from true_love_common.media import media_router
 
 from .admin_ai_routes import admin_ai_router
 from .admin_bot_routes import admin_bot_router
@@ -30,7 +29,6 @@ from .ai_routes import ai_router
 from .base_routes import base_router
 from .exception_handlers import setup_exception_handlers
 from .open_routes import open_router
-from ..jobs.job_process import MEDIA_DIRS
 from ..services import bot_registry
 from ..services.listen_manager import get_listen_manager
 
@@ -98,7 +96,6 @@ def create_app() -> FastAPI:
     app.include_router(admin_bot_router)
     app.include_router(admin_platform_router)
     app.include_router(admin_ai_router)
-    app.include_router(media_router(MEDIA_DIRS))
 
     # /admin 路径返回 tl-admin 页面
     @app.get("/admin", include_in_schema=False)

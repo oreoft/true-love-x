@@ -10,8 +10,6 @@ AI 处理完消息后通过这些接口回到 server：发消息、管理提醒�
 import logging
 
 from fastapi import APIRouter
-from true_love_common.hosts import ai_host
-from true_love_common.media import to_url
 
 from . import deps
 from .deps import verify_token
@@ -77,18 +75,18 @@ async def action_send_file(request: dict):
 
     Body:
         - receiver: 接收者
-        - path:     AI 生成文件的相对路径，如 gen_img/abc.jpg、gen_video/abc.mp4；
-                    server 拼成 AI 的 /media URL 交给 base，base 自己下载后发送
+        - path:     AI 生成文件的下载链接（AI 已传到 R2，见 true_love_common.r2），
+                    原样交给 base，base 自己下载后发送
     """
     bot = _bot(request)
     receiver = request.get("receiver", "")
     path = request.get("path", "")
     if not receiver:
         raise ValidationException("receiver 不能为空")
-    if not path:
-        raise ValidationException("path 不能为空")
+    if not path.startswith(("http://", "https://")):
+        raise ValidationException("path 要是下载链接")
 
-    url = to_url(path, ai_host())
+    url = path
     LOG.info("action/send-file: bot_id=%s receiver=%s url=%s", bot.bot_id, receiver, url)
     success, error_msg = await base_client.send_file(bot.bot_id, url, receiver)
     if not success:
