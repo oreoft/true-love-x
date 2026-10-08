@@ -16,11 +16,11 @@ LOG = logging.getLogger("ModelRegistry")
 
 # {类别: {key: 模型}}；default 是主力，fallback 是主力失败时的备用
 DEFAULT_MODELS: dict[str, dict[str, str]] = {
-    "chat":       {"default": "2api/openai/gpt-5.6-sol", "fallback": "gemini/gemini-3-pro"},
+    "chat":       {"default": "openai/gpt-6.1-sol", "fallback": "gemini/gemini-3.1-pro-preview"},
     "compress":   {"default": "openai/gpt-5.6-luna"},
-    "vision":     {"default": "2api/openai/gpt-5.6-sol"},
-    "image":      {"default": "2api/openai/gpt-image-2", "fallback": "gemini/gemini-3-pro-image"},
-    "image_edit": {"default": "2api/openai/gpt-image-2", "fallback": "openai/gpt-image-1.5"},
+    "vision":     {"default": "openai/gpt-6.1-sol"},
+    "image":      {"default": "openai/gpt-image-2", "fallback": "gemini/gemini-3-pro-image"},
+    "image_edit": {"default": "openai/gpt-image-2", "fallback": "openai/gpt-image-1.5"},
     "video":      {"default": "gemini/gemini-omni-1.1-flash", "fallback": "openai/sora-2-pro"},
     "tts":        {"default": "gemini/gemini-3.1-flash-tts-preview"},
 }
