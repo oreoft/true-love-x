@@ -9,14 +9,18 @@
 from __future__ import annotations
 
 import logging
+import urllib.request
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+import httpx
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
 from true_love_common.chat_msg import ChatMsg
 from true_love_common.http.client import async_get
+from true_love_common.r2 import is_r2_url
 
 LOG = logging.getLogger("Media")
 
@@ -70,9 +74,32 @@ async def download(url: str, save_dir: Path) -> str:
     """下载到 save_dir，文件名沿用 URL 里的，返回相对工作目录的路径"""
     filename = Path(unquote(urlparse(url).path)).name or "download.bin"
     save_dir.mkdir(parents=True, exist_ok=True)
-    result = await async_get(url, timeout=(10, 60))
-    result.raise_for_status()
+    content = await _download_r2(url) if is_r2_url(url) else None
+    if content is None:
+        result = await async_get(url, timeout=(10, 60))
+        result.raise_for_status()
+        content = result.content
     file_path = save_dir / filename
-    file_path.write_bytes(result.content)
-    LOG.info("下载媒体文件: %s -> %s (%d bytes)", url, file_path.as_posix(), len(result.content))
+    file_path.write_bytes(content)
+    LOG.info("下载媒体文件: %s -> %s (%d bytes)", urlparse(url).path, file_path.as_posix(), len(content))
     return file_path.as_posix()
+
+
+async def _download_r2(url: str) -> bytes | None:
+    """
+    R2 的链接优先走本机的系统代理：m8s 直连 R2 只有两三百 KB/s，经本机 Clash 有几 MB/s（2026-10-08 实测）。
+    没有系统代理（美国的机器）或者代理失败时返回 None，由调用方直连。
+    """
+    proxy = urllib.request.getproxies().get("https")
+    if not proxy:
+        return None
+    if "://" not in proxy:
+        proxy = f"http://{proxy}"
+    try:
+        async with httpx.AsyncClient(proxy=proxy, timeout=httpx.Timeout(60, connect=10)) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response.content
+    except Exception as e:
+        LOG.warning("经系统代理下载 R2 失败，改直连: %s", e)
+        return None
