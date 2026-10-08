@@ -21,7 +21,7 @@ DEFAULT_MODELS: dict[str, dict[str, str]] = {
     "vision":     {"default": "2api/openai/gpt-5.6-sol"},
     "image":      {"default": "2api/openai/gpt-image-2", "fallback": "gemini/gemini-3-pro-image"},
     "image_edit": {"default": "2api/openai/gpt-image-2", "fallback": "openai/gpt-image-1.5"},
-    "video":      {"default": "gemini/veo-3.1-fast-generate-preview", "fallback": "openai/sora-2-pro"},
+    "video":      {"default": "gemini/gemini-omni-1.1-flash", "fallback": "openai/sora-2-pro"},
     "tts":        {"default": "gemini/gemini-3.1-flash-tts-preview"},
 }
 CATEGORIES = list(DEFAULT_MODELS)
