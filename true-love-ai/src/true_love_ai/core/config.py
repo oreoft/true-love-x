@@ -28,6 +28,8 @@ class Config(BaseSettings):
     session: SessionConfig = SessionConfig()
     platform_key: PlatformKeyConfig = PlatformKeyConfig()
     nexu: NexuConfig = NexuConfig()
+    # 发给 base 的文件中转用的 R2 桶，见 true_love_common.r2
+    r2: dict = {}
 
     @classmethod
     def from_yaml(cls, path: str = "config.yaml") -> "Config":

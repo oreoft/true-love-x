@@ -13,6 +13,7 @@ import contextvars
 import logging
 from contextlib import contextmanager
 
+from true_love_common import r2
 from true_love_common.hosts import server_host
 from true_love_common.http.client import async_get, async_post_json, post_json
 
@@ -121,11 +122,17 @@ async def send_file(receiver: str, path: str) -> bool:
     通知 Server 发送 AI 生成的文件。
 
     path: AI 本地相对路径，如 gen_img/abc123.jpg、gen_video/abc123.mp4
-          Server 会拼成 AI 的 /media URL 交给 base 下载。
+          先传到 R2，把预签名链接交给 server 转给 base 下载：base 可能在国内，直接拉 AI 的文件很慢。
     """
+    try:
+        url = await r2.upload(r2.R2Config.from_dict(get_config().r2), path, "ai")
+    except Exception:
+        LOG.error("send_file 上传 R2 失败: path=%s", path, exc_info=True)
+        return False
+    # base 要先下载再操作微信发文件，30 秒的视频十几 MB
     result = await _async_post("/action/send-file", {
-        "receiver": receiver, "path": path,
-    }, timeout=60.0)
+        "receiver": receiver, "path": url,
+    }, timeout=180.0)
     return result.get("code") == 0
 
 
