@@ -54,16 +54,20 @@ def validate_command(command: str) -> str | None:
 
 
 def normalize_parameters(parameters) -> str | None:
-    """将 parameters 规范化为 JSON 字符串或 None；格式非法时抛 ValueError。"""
+    """将 parameters 规范化为 JSON 字符串或 None；不是 JSON 对象（比如 [] 或 null）时抛 ValueError。"""
     if isinstance(parameters, dict):
         return json.dumps(parameters, ensure_ascii=False) if parameters else None
     if isinstance(parameters, str) and parameters.strip():
         try:
-            json.loads(parameters)
-            return parameters.strip()
+            parsed = json.loads(parameters)
         except json.JSONDecodeError:
             raise ValueError("parameters 必须是合法的 JSON 格式")
-    return None
+        if not isinstance(parsed, dict):
+            raise ValueError("parameters 必须是 JSON 对象，格式：{参数名: {default: 默认值, desc: 描述}}")
+        return json.dumps(parsed, ensure_ascii=False) if parsed else None
+    if parameters in (None, "", {}):
+        return None
+    raise ValueError("parameters 必须是 JSON 对象，格式：{参数名: {default: 默认值, desc: 描述}}")
 
 
 def _to_dict(skill) -> dict:

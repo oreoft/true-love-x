@@ -11,6 +11,7 @@ import json
 import logging
 import os
 import re
+import signal
 
 from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 from true_love_ai.agent.skills.permission import DENIED_TEXT, check_permission
@@ -29,6 +30,7 @@ _OUTPUT_LIMIT = 2000
 # 那种模板里值仍可能被空格拆成几个参数，写技能的人要自己注意
 _UNSAFE_VALUE = re.compile(r"[;&|`$()<>\\\n\r\x00]")
 _NUMBER = re.compile(r"-\d+(\.\d+)?")
+_PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _build_command(command: str, param_defs: dict, overrides: dict) -> tuple[str, dict[str, str]]:
@@ -37,10 +39,21 @@ def _build_command(command: str, param_defs: dict, overrides: dict) -> tuple[str
 
     参数值不拼进命令文本，换行、引号、$()、空格都不会被外层 shell 当成命令或拆成多个参数。
     模型传来的值另外按 _UNSAFE_VALUE 拦一遍；以 - 开头的值（负数除外）会被命令当成选项（比如 curl -o 写文件），也拒绝。
-    默认值是保存技能的人写的，不拦。Raises: ValueError
+    默认值是保存技能的人写的，不拦。
+
+    参数名也要管：模型给的名字会被拿去匹配模板里的 {名字}，不加限制就能把模板里本来的花括号
+    （比如 awk '{print $1}'）换成自己的值。定义了参数的技能只认定义过的名字；
+    老技能没定义参数、模板里直接写 {package}，只认普通的标识符。Raises: ValueError
     """
+    if not isinstance(param_defs, dict):
+        raise ValueError("这个技能保存的参数定义不是对象，请重新保存技能")
     values = {k: str(v.get("default", "")) if isinstance(v, dict) else "" for k, v in param_defs.items()}
     for name, value in overrides.items():
+        name = str(name)
+        if param_defs and name not in param_defs:
+            raise ValueError(f"没有参数 '{name}'，可用的参数：{', '.join(param_defs)}")
+        if not param_defs and not _PARAM_NAME.fullmatch(name):
+            raise ValueError(f"参数名 '{name}' 不合法，只能是字母、数字、下划线")
         value = str(value)
         if _UNSAFE_VALUE.search(value):
             raise ValueError(f"参数 '{name}' 的值包含不允许的字符（换行或 ;&|`$()<>\\）")
@@ -207,20 +220,25 @@ async def skill_run(params: dict, ctx: dict) -> str:
 
     LOG.info("执行动态技能: id=%s command=%s args=%s", skill_id, command[:200], str(args_env)[:200])
 
+    proc = None
     try:
+        # 单独一个进程组：超时时连 shell 起的子进程一起杀掉，只杀 shell 的话子进程会留下来
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
                 env={**os.environ, **args_env},
+                start_new_session=True,
             ),
             timeout=5,
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_EXEC_TIMEOUT)
     except asyncio.TimeoutError as e:
+        await _kill(proc)
         raise SkillFailed(f"技能「{skill['name']}」执行超时（>{_EXEC_TIMEOUT}s）") from e
     except Exception as e:
+        await _kill(proc)
         raise SkillFailed(f"执行失败：{e}") from e
 
     output = stdout.decode("utf-8", errors="replace").strip()
@@ -235,3 +253,14 @@ async def skill_run(params: dict, ctx: dict) -> str:
     if len(output) > _OUTPUT_LIMIT:
         output = output[:_OUTPUT_LIMIT] + f"\n...（输出已截断，共 {len(output)} 字符）"
     return output
+
+
+async def _kill(proc) -> None:
+    """杀掉技能命令的整个进程组并等它退出；进程已经结束了就什么都不做"""
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    await proc.wait()

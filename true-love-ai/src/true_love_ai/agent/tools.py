@@ -72,12 +72,13 @@ class AgentDeps:
         return self._dynamic_hints
 
     def unrecovered_failures(self) -> list[str]:
-        """失败了、之后也没再成功过的技能；模型重试成功了的不算"""
-        last: dict[str, bool] = {}
-        for name, failed in self.calls:
-            last.pop(name, None)
-            last[name] = failed
-        return [name for name, failed in last.items() if failed]
+        """
+        失败了、这条消息里也没成功过的技能；同一个技能有一次成功就不算失败（模型重试成功了，
+        或者并行调了两次一成一败），和完成的先后无关
+        """
+        succeeded = {name for name, failed in self.calls if not failed}
+        failed = [name for name, failed in self.calls if failed and name not in succeeded]
+        return list(dict.fromkeys(failed))
 
 
 async def execute_skill(name: str, args: dict, deps: AgentDeps) -> tuple[str, bool]:

@@ -27,6 +27,15 @@ def raw_shell(template: str, value: str) -> str:
     return run(dsm._reference_vars(template, {"w": "TL_ARG_0"}), {"TL_ARG_0": value})
 
 
+def alive(pid: int) -> bool:
+    """Running, not a zombie waiting to be reaped"""
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        return False
+    return state not in ("Z", "X")
+
+
 class QuotingTests(unittest.TestCase):
     """The outer shell never parses a value, whatever is in it"""
 
@@ -96,10 +105,48 @@ class ValueFilterTests(unittest.TestCase):
         self.assertEqual(shell("echo {w}", None, default="-n5"), "-n5\n")
 
 
+class ParameterNameTests(unittest.TestCase):
+    """The model cannot pick names that rewrite braces the template already had"""
+
+    def test_a_made_up_name_cannot_replace_braces_in_the_template(self):
+        with self.assertRaises(ValueError):
+            dsm._build_command("curl {url} | awk '{print $1}'", {"url": {}}, {"url": "x", "print $1": "evil"})
+
+    def test_only_declared_names_are_accepted_when_the_skill_declares_some(self):
+        with self.assertRaises(ValueError):
+            dsm._build_command("echo {url} {other}", {"url": {}}, {"other": "x"})
+        command, env = dsm._build_command("echo {url}", {"url": {}}, {"url": "x"})
+        self.assertEqual(run(command, env), "x\n")
+
+    def test_skills_saved_without_definitions_still_take_plain_names(self):
+        command, env = dsm._build_command("echo pkg={package}", {}, {"package": "requests"})
+        self.assertEqual(run(command, env), "pkg=requests\n")
+        for name in ("print $1", "a b", "x}", ""):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                dsm._build_command("awk '{print $1}' {package}", {}, {name: "evil"})
+
+    def test_parameter_definitions_that_are_not_an_object_are_an_argument_error(self):
+        with self.assertRaises(ValueError):
+            dsm._build_command("echo {w}", [], {})
+
+
+class SaveParametersTests(unittest.TestCase):
+    def test_definitions_must_be_a_json_object(self):
+        from true_love_ai.memory.dynamic_skill_service import normalize_parameters
+        for bad in ("[]", "null", "1", '"x"', [], ["a"], 3):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                normalize_parameters(bad)
+        self.assertIsNone(normalize_parameters("{}"))
+        self.assertIsNone(normalize_parameters(None))
+        self.assertEqual(json.loads(normalize_parameters('{"w": {"default": "a"}}')), {"w": {"default": "a"}})
+
+
 class SkillRunTests(unittest.IsolatedAsyncioTestCase):
     async def run_skill(self, command: str, params: dict, parameters=None):
+        if parameters is None:
+            parameters = {"word": {"default": "a"}}
         skill = {"id": "s1", "name": "回声", "command": command,
-                 "parameters": json.dumps(parameters or {"word": {"default": "a"}})}
+                 "parameters": json.dumps(parameters) if parameters != "" else None}
         with patch.object(dsm._ss, "get_skill", return_value=skill), \
                 patch.object(dsm, "check_permission", return_value=True), \
                 patch.object(dsm._ss, "increment_skill_usage"):
@@ -119,6 +166,22 @@ class SkillRunTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_refused_parameter_is_told_to_the_model(self):
         self.assertIn("参数错误", await self.run_skill("echo {word}", {"word": "--help"}))
+
+    async def test_an_undeclared_parameter_is_told_to_the_model(self):
+        out = await self.run_skill("echo {word} | awk '{print $1}'", {"word": "a", "print $1": "evil"})
+
+        self.assertIn("参数错误", out)
+
+    async def test_broken_stored_definitions_are_an_argument_error_not_a_crash(self):
+        self.assertIn("参数错误", await self.run_skill("echo {w}", {}, parameters=[]))
+
+    async def test_a_command_that_runs_too_long_is_killed_with_its_children(self):
+        pid_file = Path(tempfile.mkdtemp()) / "child.pid"
+        with patch.object(dsm, "_EXEC_TIMEOUT", 0.5), self.assertRaises(SkillFailed):
+            await self.run_skill(f"sleep 30 & echo $! | tee {pid_file}; wait", {}, parameters="")
+
+        child = int(pid_file.read_text())
+        self.assertFalse(alive(child), "the child the shell started is still running")
 
     async def test_failing_command_is_a_skill_failure(self):
         with self.assertRaises(SkillFailed):

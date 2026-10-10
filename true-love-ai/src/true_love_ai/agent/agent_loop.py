@@ -221,17 +221,17 @@ class AgentLoop:
         """
         一条消息的唯一收口：按结局决定发不发、发什么，打一行"回复结局"日志
 
-        这一轮记进会话历史：用户说的话、调技能的过程，发出去了的话再加上回复（不回、自动触发时的各种兜底不记回复）。
+        这一轮记进会话历史：用户说的话、调技能的过程，真发出去了再加上回复。
+        不回、自动触发时的各种兜底、发送失败的都不记回复，免得下一轮模型以为用户看到了。
         """
         auto = is_auto_triggered(msg)
         text = outcome.text_to_send(ending, auto)
-        if turn is not None and turn.session is not None:
-            turn.session.record_turn(turn.user_text, text, turn.steps)
+        sent = False
         if text:
             receiver, at_user, reply_msg_id = _route(msg)
             sent = await self._send_reply(receiver, text, at_user, reply_msg_id)
-        else:
-            sent = False
+        if turn is not None and turn.session is not None:
+            turn.session.record_turn(turn.user_text, text if sent else None, turn.steps)
         outcome.log_outcome(ending, bot_id=msg.bot_id, chat_id=msg.chat_id, sender_id=msg.sender_id,
                             msg_type=msg.msg_type, auto=auto, sent=bool(sent))
 

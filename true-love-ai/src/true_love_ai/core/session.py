@@ -154,7 +154,7 @@ class Session:
     def record_turn(self, user_text: str, reply: Optional[str] = None,
                     tool_steps: Optional[list[ModelMessage]] = None) -> None:
         """
-        记下这一轮：用户的话、调技能的过程、发出去的回复（没发的不记）
+        记下这一轮：用户的话、调技能的过程、真发出去了的回复（没发或没发成的传 None）
 
         没发回复也记技能过程：技能可能已经办了事（比如设了提醒），下一轮模型得知道；
         自动触发时看过的图、读过的文件，之后有人问起来也用得上。

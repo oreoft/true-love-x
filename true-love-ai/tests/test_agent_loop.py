@@ -5,6 +5,7 @@ remembered. The model is scripted (see agent_harness).
 
 import asyncio
 import json
+import unittest
 from unittest.mock import AsyncMock, patch
 
 from agent_harness import AgentTestCase, Script, message, returns, tool
@@ -63,6 +64,8 @@ class ReplyTests(AgentTestCase):
             await self.drive("好耶")
 
         self.assertIn("outcome=replied sent=False", logs.output[-1])
+        # the user never saw it, so the next turn must not think they did
+        self.assertEqual([(r.role, r.content) for r in self.history()], [("user", "Alice：hi")])
 
 
 class PromptTests(AgentTestCase):
@@ -276,6 +279,23 @@ class EmptyReplyTests(AgentTestCase):
             await self.drive("  ")
 
         self.assertEqual(self.replies, [outcome.FALLBACK_TEXT[Outcome.EMPTY_FALLBACK]])
+
+
+class FailureBookkeepingTests(unittest.TestCase):
+    def deps(self, *calls):
+        d = tools.AgentDeps(skill_ctx={}, access={}, instructions="")
+        d.calls = list(calls)
+        return d
+
+    def test_one_success_of_the_same_skill_clears_its_failures_whatever_finished_first(self):
+        for calls in ([("img", True), ("img", False)], [("img", False), ("img", True)]):
+            with self.subTest(calls=calls):
+                self.assertEqual(self.deps(*calls).unrecovered_failures(), [])
+
+    def test_skills_that_never_worked_are_reported_once_in_order(self):
+        deps = self.deps(("a", True), ("b", False), ("c", True), ("a", True))
+
+        self.assertEqual(deps.unrecovered_failures(), ["a", "c"])
 
 
 class SkillFailureTests(AgentTestCase):
