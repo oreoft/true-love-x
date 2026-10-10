@@ -24,6 +24,7 @@ from true_love_common.integrations.fastapi import HttpLoggingMiddleware
 
 from .admin_ai_routes import admin_ai_router
 from .admin_bot_routes import admin_bot_router
+from .admin_wechat_routes import admin_wechat_router
 from .admin_platform_routes import admin_platform_router
 from .ai_routes import ai_router
 from .base_routes import base_router
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(base_router)
     app.include_router(ai_router)
     app.include_router(admin_bot_router)
+    app.include_router(admin_wechat_router)
     app.include_router(admin_platform_router)
     app.include_router(admin_ai_router)
 

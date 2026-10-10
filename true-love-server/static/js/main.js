@@ -3,7 +3,8 @@
  *
  * 页面分三类：
  * - 全部 bot：总览
- * - 当前 bot：聊天记录、提醒与定时任务、监听（只有能力列表里有 listen 的机器人才显示）、人设
+ * - 当前 bot：聊天（微信机器人是像微信一样能收发的聊天页，其他平台是只读的聊天记录）、提醒与定时任务、
+ *   监听（只有能力列表里有 listen 的机器人才显示）、人设
  * - 平台：技能、模型、日志
  */
 
@@ -11,6 +12,7 @@ import { platformApi } from './api.js';
 import { $, closeModal, esc, platformTag, toast } from './ui.js';
 import * as overview from './pages/overview.js';
 import * as messages from './pages/messages.js';
+import * as wechat from './pages/wechat.js';
 import * as schedule from './pages/schedule.js';
 import * as listen from './pages/listen.js';
 import * as skills from './pages/skills.js';
@@ -19,7 +21,8 @@ import * as persona from './pages/persona.js';
 import * as logs from './pages/logs.js';
 
 const BOT_PAGES = {
-    messages: { module: messages, label: '聊天记录' },
+    // 能操作微信的机器人用 wechatModule
+    messages: { module: messages, wechatModule: wechat, label: '聊天' },
     schedule: { module: schedule, label: '提醒与定时任务' },
     listen: { module: listen, label: '监听管理', capability: 'listen', tag: '微信' },
     persona: { module: persona, label: '人设' },
@@ -114,7 +117,8 @@ async function render() {
 
     renderSwitcher();
     renderNav();
-    const module = page === 'overview' ? overview : (BOT_PAGES[page] || PLATFORM_PAGES[page]).module;
+    const info = page === 'overview' ? { module: overview } : BOT_PAGES[page] || PLATFORM_PAGES[page];
+    const module = info.wechatModule && bot && bot.capabilities.includes('listen') ? info.wechatModule : info.module;
     // 每次渲染一个新的容器：接口慢的时候切走了，旧页面晚到的结果只会写进已经换下来的容器，不会盖住新页面
     const pageRoot = document.createElement('div');
     pageRoot.className = 'page';
