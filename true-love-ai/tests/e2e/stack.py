@@ -8,6 +8,9 @@ Only the base and the LLM are fakes (see fakes.py). The dev addresses are fixed 
 (server on localhost:8078, AI on localhost:8079), so those two ports must be free.
 
 Each service gets a throwaway working directory with its own config-dev.yaml and dbs/.
+
+TL_E2E_LITELLM=/path/to/litellm puts a real LiteLLM proxy between tl-ai and the fake LLM, the way production
+runs, so request formats LiteLLM would reject show up here too.
 """
 
 import json
@@ -63,6 +66,9 @@ class Stack:
     def _start(self):
         self.llm.start()
         self.base.start()
+        llm_url, llm_key = self.llm.url, "e2e-key"
+        if os.environ.get("TL_E2E_LITELLM"):
+            llm_url, llm_key = self._start_litellm(os.environ["TL_E2E_LITELLM"]), "sk-e2e"
         ai_home = self.home / "ai"
         server_home = self.home / "server"
         ai_home.mkdir()
@@ -72,7 +78,7 @@ class Stack:
         (ai_home / "config-dev.yaml").write_text(json.dumps({
             "http": {"host": "127.0.0.1", "port": 8079, "token": [TOKEN]},
             "session": {"ttl_seconds": 86400, "compress_threshold": 8, "compress_keep_recent": 2},
-            "platform_key": {"litellm_api_key": "e2e-key", "litellm_base_url": self.llm.url},
+            "platform_key": {"litellm_api_key": llm_key, "litellm_base_url": llm_url},
         }), encoding="utf-8")
         (server_home / "config-dev.yaml").write_text(json.dumps({
             "default_bot_id": BOT_ID,
@@ -99,6 +105,24 @@ class Stack:
                        json={"ai_rate_limit": {"count": 10000, "seconds": 1}}, timeout=10)
         r.raise_for_status()
         return self
+
+    def _start_litellm(self, binary: str) -> str:
+        """A LiteLLM proxy that routes every model name the tests use to the fake LLM"""
+        from .fakes import free_port
+        port = free_port()
+        models = ["e2e/chat", "e2e/chat-fallback", "e2e/chat-v2", FakeLLM.COMPRESS_MODEL, FakeLLM.VISION_MODEL]
+        config = {
+            "model_list": [{"model_name": m, "litellm_params": {"model": f"openai/{m}", "api_base": self.llm.url,
+                                                                 "api_key": "upstream"}} for m in models],
+            "general_settings": {"master_key": "sk-e2e"},
+        }
+        path = self.home / "litellm.json"
+        path.write_text(json.dumps(config), encoding="utf-8")
+        env = {k: v for k, v in os.environ.items()}
+        self._spawn("litellm", self.home, binary, "--config", str(path), "--host", "127.0.0.1", "--port", str(port),
+                    env=env)
+        self._wait_up("litellm", f"http://127.0.0.1:{port}/health/liveliness", timeout=120)
+        return f"http://127.0.0.1:{port}"
 
     def stop(self):
         for proc in self.procs.values():

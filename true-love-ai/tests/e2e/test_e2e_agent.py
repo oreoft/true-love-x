@@ -5,7 +5,6 @@ come back out to the base. The model is scripted per test (see fakes.FakeLLM).
 
 import json
 import time
-from pathlib import Path
 
 import pytest
 
@@ -357,3 +356,88 @@ def test_long_conversation_is_compressed_without_losing_messages(e2e, chat):
     summarized = "\n".join(r.all_text() for r in compress)
     for i in range(10):
         assert f"第{i}句" in summarized or f"第{i}句" in last, f"第{i}句 was lost"
+
+
+# ==================== media and quotes ====================
+
+def _path_in(text: str, marker: str) -> str:
+    return text.split(marker)[1].split("]")[0]
+
+
+def test_pdf_is_read_with_a_notice_first(e2e, chat):
+    e2e.base.media["wx_files/report.pdf"] = (b"%PDF-1.4 fake", "application/pdf")
+    e2e.llm.vision_answer = "这份报告讲的是季度营收"
+
+    def brain(req: LLMRequest) -> dict:
+        if req.tool_results:
+            return text("文件说：" + req.tool_results[0])
+        return calls(call("read_file", {"file_path": _path_in(req.last_user, "[文件:"), "question": "讲了啥"}))
+
+    e2e.llm.brain = brain
+    e2e.say("文件\nreport.pdf\n12K", chat=chat, msg_type="file",
+            file_msg={"file_name": "report.pdf", "resource": {"ref": "wx_files/report.pdf"}})
+    sent = e2e.base.wait_texts(chat, 2)
+
+    assert "文件" in sent[0]["content"]
+    assert sent[1]["content"] == "文件说：这份报告讲的是季度营收"
+    vision = [r for r in e2e.llm.requests if r.model == e2e.llm.VISION_MODEL]
+    assert any(p.get("type") == "file" for m in vision[-1].messages for p in m["content"] if isinstance(p, dict))
+
+
+def test_quoted_image_is_analyzed(e2e, chat):
+    e2e.base.media["wx_imgs/quoted.jpg"] = (b"\xff\xd8\xff quoted", "image/jpeg")
+    e2e.llm.vision_answer = "图里写着：周五放假"
+
+    def brain(req: LLMRequest) -> dict:
+        if req.tool_results:
+            return text(req.tool_results[0])
+        return calls(call("analyze_image", {"question": "写的啥", "image_path": _path_in(req.last_user, "[引用图片:")}))
+
+    e2e.llm.brain = brain
+    e2e.say("这张图里写的啥", chat=chat, msg_type="refer",
+            refer_msg={"msg_type": "image", "image_msg": {"resource": {"ref": "wx_imgs/quoted.jpg"}}})
+
+    assert e2e.base.wait_texts(chat, 2)[1]["content"] == "图里写着：周五放假"
+
+
+# ==================== settings changed in tl-admin take effect on the next message ====================
+
+def test_persona_and_model_changes_apply_to_the_next_message(e2e, chat):
+    e2e.llm.brain = lambda req: text(f"{req.model} 在")
+    e2e.say("在吗", chat=chat)
+    assert e2e.base.wait_texts(chat)[0]["content"] == "e2e/chat 在"
+
+    e2e.ai_admin("/admin/persona/save", bot_id=BOT_ID, chat=chat, prompt="你是暴躁的{name}。")
+    e2e.ai_admin("/admin/model/save", category="chat", key="default", value="e2e/chat-v2")
+    try:
+        e2e.say("在吗", chat=chat)
+        assert e2e.base.wait_texts(chat, 2)[1]["content"] == "e2e/chat-v2 在"
+        assert "你是暴躁的小助手。" in e2e.llm.agent_requests()[-1].system
+    finally:
+        e2e.ai_admin("/admin/model/save", category="chat", key="default", value="e2e/chat")
+
+
+# ==================== one slow conversation does not hold up another ====================
+
+def test_a_slow_skill_in_one_chat_does_not_delay_another_chat(e2e, chat):
+    other = chat + "-b"
+    e2e.llm.brain = first_call_then(reply_with_tool_result, call("skill_save", {
+        "id": "slow_job", "name": "慢任务", "description": "慢", "command": "sleep 3; echo slow-done"}))
+    e2e.say("存个慢任务", chat=chat)
+    e2e.base.wait_texts(chat)
+
+    def brain(req: LLMRequest) -> dict:
+        if "跑慢任务" in req.last_user and not req.tool_results:
+            return calls(call("skill_run", {"id": "slow_job"}))
+        if req.tool_results:
+            return text("慢任务：" + req.tool_results[0])
+        return text("马上回你")
+
+    e2e.llm.brain = brain
+    e2e.say("跑慢任务", chat=chat)
+    time.sleep(0.3)
+    started = time.time()
+    e2e.say("在吗", chat=other)
+    assert e2e.base.wait_texts(other)[0]["content"] == "马上回你"
+    assert time.time() - started < 2.5, "the other chat waited for the slow skill"
+    assert e2e.base.wait_texts(chat, 3, timeout=30)[2]["content"] == "慢任务：slow-done"
