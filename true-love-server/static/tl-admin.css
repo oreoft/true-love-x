@@ -130,6 +130,93 @@ td.wrap { max-width: 320px; overflow-wrap: anywhere; }
 .pill.ok { background: var(--accent-soft); color: var(--ok); }
 .pill.bad { background: var(--bad-soft); color: var(--bad); }
 
+/* 微信机器人的聊天页：最左边一列切换功能，会话列表，聊天窗口 */
+.wx { display: grid; grid-template-columns: 64px minmax(0, 1fr); background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; height: calc(100vh - 110px); min-height: 480px; overflow: hidden; }
+.wx-rail { background: var(--bg); border-right: 1px solid var(--line); display: flex; flex-direction: column; align-items: center;
+    gap: 6px; padding: 12px 0; }
+.wx-tab { display: flex; flex-direction: column; align-items: center; gap: 2px; width: 52px; padding: 8px 0; border: 0;
+    background: none; border-radius: 8px; color: var(--muted); font-size: 20px; line-height: 1; }
+.wx-tab small { font-size: 11px; }
+.wx-tab:hover { background: var(--panel); }
+.wx-tab[aria-selected="true"] { background: var(--accent-soft); color: var(--accent); }
+.wx-pane { min-width: 0; min-height: 0; display: flex; }
+.wx-body { flex: 1; min-width: 0; min-height: 0; }
+.wx-body.tab-chat { display: grid; grid-template-columns: 260px minmax(0, 1fr); }
+.wx-body.tab-friends, .wx-body.tab-records { overflow-y: auto; padding: 16px 20px; display: flex; flex-direction: column; gap: 18px; }
+.wx-body.tab-records .chat { height: calc(100vh - 210px); }
+.wx-empty { margin: auto; color: var(--muted); }
+
+.wx-list { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.wx-search { display: flex; gap: 6px; padding: 10px; border-bottom: 1px solid var(--line); }
+.wx-search input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 4px 10px; }
+.wx-sessions { overflow-y: auto; flex: 1; }
+.wx-session { display: flex; align-items: center; gap: 10px; width: 100%; border: 0; background: none; padding: 10px 12px;
+    text-align: left; border-bottom: 1px solid var(--line); position: relative; }
+.wx-session:hover { background: var(--bg); }
+.wx-session[aria-current="true"] { background: var(--accent-soft); }
+.wx-session-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.wx-session-top, .wx-session-bottom { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.wx-session-top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.wx-session-top small { color: var(--muted); font-size: 11px; flex: none; }
+.wx-preview { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+.wx-mute { font-size: 11px; }
+.wx-badge { position: absolute; left: 38px; top: 5px; background: var(--bad); color: #fff; border-radius: 999px; font-size: 10px;
+    min-width: 17px; height: 17px; padding: 0 4px; display: flex; align-items: center; justify-content: center; }
+.wx-badge.muted { background: var(--muted); }
+.wx-avatar { width: 36px; height: 36px; border-radius: 6px; flex: none; color: #fff; display: inline-flex; align-items: center;
+    justify-content: center; font-size: 15px; user-select: none; }
+
+.tab-chat > .wx-chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.wx-head { display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.wx-head b { font-size: 15px; overflow-wrap: anywhere; }
+.wx-head .grow, .wx-tools .grow { flex: 1; }
+.wx-msgs { flex: 1; overflow-y: auto; padding: 14px 18px; display: flex; flex-direction: column; gap: 12px; background: var(--bg); }
+.wx-time, .wx-system { align-self: center; font-size: 11.5px; color: var(--muted); text-align: center; max-width: 80%; }
+.wx-system { background: var(--panel); border-radius: 4px; padding: 2px 8px; }
+.wx-msg { display: flex; gap: 10px; align-items: flex-start; max-width: 78%; }
+.wx-msg.self { align-self: flex-end; flex-direction: row-reverse; }
+.wx-msg [data-avatar] { cursor: pointer; }
+.wx-msg-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.wx-msg.self .wx-msg-main { align-items: flex-end; }
+.wx-sender { font-size: 11.5px; color: var(--muted); }
+.wx-bubble { background: var(--panel); border-radius: 6px; padding: 7px 11px; white-space: pre-wrap; overflow-wrap: anywhere;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, .04); cursor: context-menu; }
+.wx-msg.self .wx-bubble { background: #95ec69; color: #111; }
+.wx-type { color: var(--muted); }
+.wx-msg.self .wx-type { color: #3c6b2a; }
+.wx-quote { margin-top: 6px; padding: 4px 8px; border-radius: 4px; background: var(--bg); color: var(--muted); font-size: 12px; }
+.wx-msg.self .wx-quote { background: rgba(0, 0, 0, .06); color: #3c5a2e; }
+.wx-load { border: 0; background: none; padding: 0 2px; color: var(--accent); font-size: 12px; cursor: pointer; text-decoration: underline; }
+.wx-load:disabled { color: var(--muted); text-decoration: none; cursor: default; }
+.wx-media { display: block; max-width: min(260px, 100%); max-height: 320px; border-radius: 4px; }
+
+.wx-compose { border-top: 1px solid var(--line); padding: 8px 14px 10px; display: flex; flex-direction: column; gap: 6px; }
+.wx-extra { display: flex; flex-wrap: wrap; gap: 6px; }
+.wx-chip { display: inline-flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+    padding: 2px 8px; font-size: 12px; max-width: 100%; }
+.wx-chip button { background: none; border: 0; padding: 0 2px; color: var(--muted); }
+.wx-tools { display: flex; align-items: center; gap: 4px; }
+.wx-tool { border: 0; background: none; border-radius: 6px; padding: 2px 8px; font-size: 16px; cursor: pointer; color: var(--ink); }
+.wx-tool:hover { background: var(--bg); }
+.wx-hint { font-size: 11px; }
+.wx-compose textarea { border: 0; background: none; resize: none; outline: none; padding: 2px; min-height: 60px; }
+.wx-compose textarea:focus-visible { outline: none; }
+.wx-send-row { display: flex; justify-content: flex-end; }
+
+.wx-menu { position: fixed; z-index: 40; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 4px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .16); display: flex; flex-direction: column; min-width: 120px; }
+.wx-menu button { background: none; border: 0; text-align: left; padding: 6px 12px; border-radius: 5px; }
+.wx-menu button:hover, .wx-menu button:focus-visible { background: var(--accent-soft); outline: none; }
+
+.wx-section { display: flex; flex-direction: column; gap: 10px; }
+.wx-requests { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.wx-request { display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.wx-request:last-child { border-bottom: 0; }
+.wx-request-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wx-request-main span { font-size: 12px; overflow-wrap: anywhere; }
+.wx-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; align-items: end; max-width: 860px; }
+
 /* 监听 */
 .listen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .listen { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
@@ -200,5 +287,14 @@ td.wrap { max-width: 320px; overflow-wrap: anywhere; }
     .msgs { flex: none; height: 60vh; }
     .top { padding: 10px 16px; }
     .log { grid-template-columns: 1fr; gap: 0; }
+    /* 微信聊天页：功能栏放到顶上横着排，会话列表和聊天窗口上下排 */
+    .wx { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: calc(100vh - 140px); }
+    .wx-rail { flex-direction: row; justify-content: center; border-right: 0; border-bottom: 1px solid var(--line); padding: 4px; }
+    .wx-tab { flex-direction: row; width: auto; padding: 6px 12px; gap: 6px; font-size: 15px; }
+    .wx-body.tab-chat { grid-template-columns: minmax(0, 1fr); grid-template-rows: 34% minmax(0, 1fr); }
+    .wx-list { border-right: 0; border-bottom: 1px solid var(--line); }
+    .wx-msg { max-width: 92%; }
+    .wx-hint { display: none; }
+    .wx-body.tab-friends, .wx-body.tab-records { padding: 12px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

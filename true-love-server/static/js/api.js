@@ -7,13 +7,40 @@
  */
 
 async function request(url, { method = 'GET', body } = {}) {
+    return parse(() => fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: body === undefined ? undefined : JSON.stringify(body),
+    }));
+}
+
+/** 请求体直接是文件内容 */
+function upload(url, file) {
+    return parse(() => fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file }));
+}
+
+/** 取一个文件，返回本地链接和文件名；后端报错时回的是 JSON */
+async function fetchFile(url) {
     let response;
     try {
-        response = await fetch(url, {
-            method,
-            headers: { 'Content-Type': 'application/json' },
-            body: body === undefined ? undefined : JSON.stringify(body),
-        });
+        response = await fetch(url);
+    } catch (e) {
+        throw new Error('无法连接到服务器');
+    }
+    if (!response.ok || (response.headers.get('Content-Type') || '').includes('application/json')) {
+        const data = await response.json().catch(() => ({ message: `服务器返回 ${response.status}` }));
+        throw new Error(data.message || '加载失败');
+    }
+    const disposition = response.headers.get('Content-Disposition') || '';
+    const match = /filename\*=UTF-8''([^;]+)/.exec(disposition);
+    const blob = await response.blob();
+    return { url: URL.createObjectURL(blob), name: match ? decodeURIComponent(match[1]) : 'file', type: blob.type };
+}
+
+async function parse(send) {
+    let response;
+    try {
+        response = await send();
     } catch (e) {
         throw new Error('无法连接到服务器');
     }
@@ -66,6 +93,20 @@ export function botApi(botId) {
         taskUpdate: (task) => post(`${base}/tasks/update`, task),
         taskDelete: (taskId) => post(`${base}/tasks/delete`, { task_id: taskId }),
         taskRun: (taskId) => post(`${base}/tasks/run`, { task_id: taskId }),
+
+        // 聊天页和好友页：现场操作机器人的微信（只有微信机器人有）
+        wxSessions: () => request(`${base}/wechat/sessions`),
+        wxMessages: (chatName, history = 0) => request(`${base}/wechat/messages${query({ chat_name: chatName, history })}`),
+        wxSendText: (chatName, content, at = []) => post(`${base}/wechat/send-text`, { chat_name: chatName, content, at }),
+        wxSendFile: (chatName, file) => upload(`${base}/wechat/send-file${query({ chat_name: chatName, filename: file.name })}`, file),
+        wxMedia: (chatName, msgId, quoted = false) =>
+            fetchFile(`${base}/wechat/media${query({ chat_name: chatName, msg_id: msgId, quoted: quoted || undefined })}`),
+        wxQuote: (chatName, msgId, content) => post(`${base}/wechat/quote`, { chat_name: chatName, msg_id: msgId, content }),
+        wxTickle: (chatName, msgId) => post(`${base}/wechat/tickle`, { chat_name: chatName, msg_id: msgId }),
+        wxFriendRequests: () => request(`${base}/wechat/friend-requests`),
+        wxFriendAccept: (request) => post(`${base}/wechat/friend-accept`, request),
+        wxFriendAdd: (request) => post(`${base}/wechat/friend-add`, request),
+        wxFriendEdit: (request) => post(`${base}/wechat/friend-edit`, request),
 
         memory: (chatId, sender) => request(`${base}/memory${query({ chat_id: chatId, sender })}`),
         personas: () => request(`${base}/personas`),
