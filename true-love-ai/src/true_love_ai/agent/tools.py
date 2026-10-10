@@ -12,6 +12,7 @@
 
 import asyncio
 import copy
+import json
 import logging
 import random
 from dataclasses import dataclass, field
@@ -117,8 +118,24 @@ def dynamic_skill_hints(access: dict) -> str:
     except Exception as e:
         LOG.warning("加载动态技能列表失败: %s", e, exc_info=True)
         return ""
-    return "\n".join(f"- {s['id']}（{s['name']}）: {s['description']}" for s in skills
-                     if check_permission(s["id"], access))
+    return "\n".join(f"- {s['id']}（{s['name']}）: {s['description']}{_param_hint(s.get('parameters'))}"
+                     for s in skills if check_permission(s["id"], access))
+
+
+def _param_hint(parameters_json: Optional[str]) -> str:
+    """动态技能的参数名、说明和默认值；模型只能传这些名字，不写出来它容易猜错"""
+    try:
+        defs = json.loads(parameters_json) if parameters_json else {}
+    except ValueError:
+        return ""
+    if not isinstance(defs, dict) or not defs:
+        return ""
+    items = []
+    for name, d in defs.items():
+        d = d if isinstance(d, dict) else {}
+        desc = "，".join(x for x in (str(d.get("desc") or ""), f"默认 {d['default']}" if d.get("default") else "") if x)
+        items.append(f"{name}（{desc}）" if desc else str(name))
+    return "；参数（放进 params）：" + "、".join(items)
 
 
 def tool_definition(schema: dict) -> ToolDefinition:

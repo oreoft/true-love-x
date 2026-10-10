@@ -421,6 +421,35 @@ class PermissionTests(AgentTestCase):
         self.assertIn("pypi_version（查 PyPI 版本）: 查某个包的最新版本", description)
         self.assertNotIn("secret_cmd", description)
 
+    async def test_skill_run_tells_the_model_which_parameters_a_dynamic_skill_takes(self):
+        self.add_skill("skill_run", description="执行一个已保存的动态技能。")
+        dynamic_skill_service.save_skill("pypi_version", "查 PyPI 版本", "查某个包的最新版本",
+                                         "curl https://pypi.org/pypi/{package}/json",
+                                         {"package": {"default": "requests", "desc": "包名"}, "fmt": {}}, "boss",
+                                         default_points=["*:*:*:*"])
+        script = await self.drive("好")
+
+        self.assertIn("参数（放进 params）：package（包名，默认 requests）、fmt",
+                      script.seen[0].tool_def("skill_run").description)
+
+    async def test_history_drops_only_the_skills_this_sender_cannot_use(self):
+        """people with different permissions take turns in a group; some models reject undefined tools in history"""
+        self.add_skill("set_model", returns("模型换好了"))
+        self.add_skill("gold_price", returns("金价 600"))
+        skill_access_service.set_points("set_model", ["wechat:bot_a:boss"], kind="builtin")
+        script = Script([tool("set_model"), tool("gold_price")], "都办好了", "嗯")
+        loop = self.loop(script)
+        await loop.run(message(sender_id="boss", sender_name="老板"))
+        await loop.run(message(sender_id="alice", msg_id="m2"))
+
+        alice_sees = script.seen[-1]
+        self.assertEqual(alice_sees.tools, ["gold_price"])
+        history = alice_sees.text()
+        self.assertIn("call gold_price", history)
+        self.assertIn("result gold_price 金价 600", history)
+        self.assertNotIn("set_model", history)
+        self.assertIn("都办好了", history)
+
 
 class RoundLimitTests(AgentTestCase):
     async def test_a_model_that_keeps_calling_skills_is_made_to_answer(self):

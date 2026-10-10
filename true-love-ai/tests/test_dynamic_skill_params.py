@@ -1,5 +1,6 @@
 """Values the model passes to a saved shell skill are data: they can never run commands or add options."""
 
+import asyncio
 import json
 import os
 import subprocess
@@ -28,12 +29,20 @@ def raw_shell(template: str, value: str) -> str:
 
 
 def alive(pid: int) -> bool:
-    """Running, not a zombie waiting to be reaped"""
+    """Running, not a zombie waiting to be reaped; /proc where there is one (Linux), signal 0 elsewhere (macOS)"""
+    stat = Path(f"/proc/{pid}/stat")
+    if Path("/proc/self/stat").exists():
+        try:
+            return stat.read_text().rsplit(")", 1)[1].split()[0] not in ("Z", "X")
+        except FileNotFoundError:
+            return False
     try:
-        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
-    except FileNotFoundError:
+        os.kill(pid, 0)
+    except ProcessLookupError:
         return False
-    return state not in ("Z", "X")
+    except PermissionError:
+        return True
+    return True
 
 
 class QuotingTests(unittest.TestCase):
@@ -136,6 +145,9 @@ class SaveParametersTests(unittest.TestCase):
         for bad in ("[]", "null", "1", '"x"', [], ["a"], 3):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 normalize_parameters(bad)
+        for bad_name in ('{"print $1": {}}', {"a b": {}}, {"x}": {}}):
+            with self.subTest(bad_name=bad_name), self.assertRaises(ValueError):
+                normalize_parameters(bad_name)
         self.assertIsNone(normalize_parameters("{}"))
         self.assertIsNone(normalize_parameters(None))
         self.assertEqual(json.loads(normalize_parameters('{"w": {"default": "a"}}')), {"w": {"default": "a"}})
@@ -182,6 +194,26 @@ class SkillRunTests(unittest.IsolatedAsyncioTestCase):
 
         child = int(pid_file.read_text())
         self.assertFalse(alive(child), "the child the shell started is still running")
+
+    async def test_a_cancelled_skill_kills_its_command_too(self):
+        """when tl-ai stops, the task running a skill is cancelled; its shell and children must not outlive it"""
+        pid_file = Path(tempfile.mkdtemp()) / "child.pid"
+        task = asyncio.create_task(self.run_skill(f"sleep 30 & echo $! | tee {pid_file}; wait", {}, parameters=""))
+        for _ in range(100):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            await asyncio.sleep(0.02)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+
+        self.assertFalse(alive(int(pid_file.read_text())), "the command kept running after the skill was cancelled")
+
+    async def test_a_strange_declared_name_cannot_be_passed_by_the_model(self):
+        """skills saved before names were checked may still declare one"""
+        out = await self.run_skill("awk '{print $1}' {w}", {"print $1": "evil"}, parameters={"print $1": {}, "w": {}})
+
+        self.assertIn("参数错误", out)
 
     async def test_failing_command_is_a_skill_failure(self):
         with self.assertRaises(SkillFailed):

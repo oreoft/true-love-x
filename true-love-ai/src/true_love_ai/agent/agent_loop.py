@@ -183,8 +183,7 @@ class AgentLoop:
             notify=not auto,
             max_tool_rounds=MAX_TOOL_ITERATIONS,
         )
-        if not deps.allowed_skills():
-            history = without_tool_steps(history)
+        history = without_tool_steps(history, deps.allowed_skills())
 
         # 出错时也要拿到这轮已经发生的事（比如已经设好的提醒），按 run_id 从捕获的消息里挑出这一轮的
         run_id = uuid.uuid4().hex

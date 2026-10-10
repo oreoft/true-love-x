@@ -83,20 +83,22 @@ def tool_steps_json(steps: list[ModelMessage]) -> Optional[str]:
     return ModelMessagesTypeAdapter.dump_json(kept).decode()
 
 
-def without_tool_steps(messages: list[ModelMessage]) -> list[ModelMessage]:
+def without_tool_steps(messages: list[ModelMessage], keep: frozenset[str] = frozenset()) -> list[ModelMessage]:
     """
-    去掉历史里的技能调用过程，只留说过的话
+    去掉历史里不在 keep 里的技能的调用和结果，说过的话都留着
 
-    给这次没有任何技能可用的人用：有的模型（比如 Claude）不接受"历史里有工具调用、这次却没给工具定义"的请求
+    这次给模型的工具定义只有 keep 这些：有的模型（比如 Claude）不接受历史里出现没定义的工具。
+    群里权限不同的人轮流说话时，别人调过、这个人用不了的技能就从这次的历史里拿掉；调用和结果按技能名一起去掉，不会配不上对。
     """
     kept: list[ModelMessage] = []
     for message in messages:
         if isinstance(message, ModelResponse):
-            parts = [p for p in message.parts if not isinstance(p, ToolCallPart)]
+            parts = [p for p in message.parts if not isinstance(p, ToolCallPart) or p.tool_name in keep]
             if parts:
                 kept.append(ModelResponse(parts=parts))
         else:
-            parts = [p for p in message.parts if not isinstance(p, (ToolReturnPart, RetryPromptPart))]
+            parts = [p for p in message.parts
+                     if not isinstance(p, (ToolReturnPart, RetryPromptPart)) or p.tool_name in keep]
             if parts:
                 kept.append(ModelRequest(parts=parts))
     return kept

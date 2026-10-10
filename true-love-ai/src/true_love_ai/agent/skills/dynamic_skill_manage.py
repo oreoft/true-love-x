@@ -30,7 +30,6 @@ _OUTPUT_LIMIT = 2000
 # 那种模板里值仍可能被空格拆成几个参数，写技能的人要自己注意
 _UNSAFE_VALUE = re.compile(r"[;&|`$()<>\\\n\r\x00]")
 _NUMBER = re.compile(r"-\d+(\.\d+)?")
-_PARAM_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _build_command(command: str, param_defs: dict, overrides: dict) -> tuple[str, dict[str, str]]:
@@ -42,18 +41,20 @@ def _build_command(command: str, param_defs: dict, overrides: dict) -> tuple[str
     默认值是保存技能的人写的，不拦。
 
     参数名也要管：模型给的名字会被拿去匹配模板里的 {名字}，不加限制就能把模板里本来的花括号
-    （比如 awk '{print $1}'）换成自己的值。定义了参数的技能只认定义过的名字；
-    老技能没定义参数、模板里直接写 {package}，只认普通的标识符。Raises: ValueError
+    （比如 awk '{print $1}'）换成自己的值。名字只能是普通的标识符（保存时也这样查）；定义了参数的技能
+    只认定义过的名字。老技能没定义参数、模板里直接写 {package}，照样能传。
+    已知没法防的：没定义参数的老技能，模板里本来就有 {print} 这种标识符写的花括号，仍会被同名参数换掉，
+    这种技能重新保存一次、写上参数定义就好。Raises: ValueError
     """
     if not isinstance(param_defs, dict):
         raise ValueError("这个技能保存的参数定义不是对象，请重新保存技能")
     values = {k: str(v.get("default", "")) if isinstance(v, dict) else "" for k, v in param_defs.items()}
     for name, value in overrides.items():
         name = str(name)
+        if not _ss.PARAM_NAME.fullmatch(name):
+            raise ValueError(f"参数名 '{name}' 不合法，只能是字母、数字、下划线")
         if param_defs and name not in param_defs:
             raise ValueError(f"没有参数 '{name}'，可用的参数：{', '.join(param_defs)}")
-        if not param_defs and not _PARAM_NAME.fullmatch(name):
-            raise ValueError(f"参数名 '{name}' 不合法，只能是字母、数字、下划线")
         value = str(value)
         if _UNSAFE_VALUE.search(value):
             raise ValueError(f"参数 '{name}' 的值包含不允许的字符（换行或 ;&|`$()<>\\）")
@@ -235,11 +236,12 @@ async def skill_run(params: dict, ctx: dict) -> str:
         )
         stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_EXEC_TIMEOUT)
     except asyncio.TimeoutError as e:
-        await _kill(proc)
         raise SkillFailed(f"技能「{skill['name']}」执行超时（>{_EXEC_TIMEOUT}s）") from e
     except Exception as e:
-        await _kill(proc)
         raise SkillFailed(f"执行失败：{e}") from e
+    finally:
+        # 超时、出错、被取消（比如停服）都要杀；正常跑完的进程已经结束，_kill 什么都不做
+        await _kill(proc)
 
     output = stdout.decode("utf-8", errors="replace").strip()
     if proc.returncode != 0:
