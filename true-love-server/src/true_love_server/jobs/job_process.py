@@ -28,7 +28,7 @@ _config = Config()
 alapi_config = _config.ALAPI
 LOG = logging.getLogger("JobProcess")
 
-# 摸鱼图、早报图的目录，通过 /media 开放给 base 下载后发送；所有机器人共用，一天只下载一次
+# 摸鱼图、早报图存在 moyu-jpg/、zaobao-jpg/，发送时先传到 R2 再把链接给 base（见 _send_img）；所有机器人共用，一天只下载一次
 
 # 默认网络请求超时时间（秒）
 DEFAULT_TIMEOUT = 60
