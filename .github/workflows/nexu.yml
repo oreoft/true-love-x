@@ -64,7 +64,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=nexu
-          cache-to: type=gha,mode=max,scope=nexu
+          cache-to: type=gha,scope=nexu
           platforms: linux/amd64
 
   deploy:
