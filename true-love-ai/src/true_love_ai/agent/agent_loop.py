@@ -2,45 +2,43 @@
 """
 Agent Loop
 
-核心 Agent 执行引擎：接收消息 → 构建上下文 → LLM + tools 循环 → 发送回复
+核心 Agent 执行引擎：接收消息 → 构建上下文 → pydantic_ai Agent（LLM + 技能循环）→ 发送回复
 
 流程：
     收到 msg
-      → 从 AI 本地 DB 获取 user_ctx
-      → 获取 session history
-      → build prompt
-      → LLM (带 tools)
-      → if tool_calls: 执行 skill → append 结果 → 继续循环
-      → if text answer: 通过 Server /action/send 发送 → 保存 session
+      → 消息转成文字（链接、图片、文件、语音、引用）
+      → 记下用户说的话，取出之前的历史（含之前调技能的过程）和摘要
+      → instructions（人设、规则、摘要）+ 历史 + 最新消息（时间、发送者画像、这次的话）交给 pydantic_ai
+      → 模型调技能就执行（见 agent.tools），直到它给出文字回答；技能轮次到上限后不再给工具，逼它直接回答
+      → finish：按结局决定发不发、发什么，通过 Server /action/send 发送，发出去的回复连同技能过程记进历史
 """
 
-import asyncio
-import json
 import logging
 import re
+from dataclasses import dataclass, field
 from typing import Optional
 
+from pydantic_ai import Agent, RunContext
+from pydantic_ai.exceptions import UsageLimitExceeded
+from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.usage import UsageLimits
 from true_love_common.chat_msg import ChatMsg
-from true_love_ai.core.session import get_session_manager
-from true_love_ai.llm.router import get_llm_router
-from true_love_ai.memory.memory_manager import get_user_context
-from true_love_ai.agent import link_reader, outcome, skill_registry
+
+from true_love_ai.agent import link_reader, outcome, prompt, server_client
 from true_love_ai.agent.outcome import Ending, Outcome
+from true_love_ai.agent.tools import TOOL_ARG_RETRIES, AgentDeps, build_toolset
+from true_love_ai.core.session import Session, get_session_manager
+from true_love_ai.llm.router import get_llm_router
+from true_love_ai.memory import persona_service
+from true_love_ai.memory.memory_manager import get_user_context
 
 LOG = logging.getLogger("AgentLoop")
 
-# 单次会话最大 tool 调用轮次（防止死循环）
+# 一条消息里最多调几轮技能（每轮可以并行调多个）；到了上限不再给工具，模型拿已有结果直接回答
 MAX_TOOL_ITERATIONS = 6
-# 单个 skill 执行超时（秒），skill 可以在 schema 里用 timeout 自己声明
-SKILL_TIMEOUT_SECONDS = 300
-# 自动触发时附在这条消息后面（只给这一次调用，不进会话历史），让模型没话说时可以不回
-AUTO_REPLY_RULE = (
-    "（系统提示：上面这条没人叫你，是你在群里自己刷到的，群里的人并不期待你说话。"
-    f"默认只回复 {outcome.SKIP_MARKER}。"
-    "只有你真的能说出让人眼前一亮的东西才开口：好笑的吐槽或梗、对方可能不知道的有用信息、指出明显的错误或谣言。"
-    "复述或描述内容（比如“图上是一个人在健身”“这张图讲的是…”）、泛泛的建议和提醒、为了接话而接话，都不算，"
-    f"这些情况一律只回复 {outcome.SKIP_MARKER}，不要加别的字。）"
-)
+# 模型请求次数的硬上限：技能轮次 + 最后回答 + 参数出错重来的余量，超了按 too_many_rounds 收尾
+MAX_MODEL_REQUESTS = MAX_TOOL_ITERATIONS + 4
+AUTO_REPLY_RULE = prompt.AUTO_REPLY_RULE
 # 图片、文件消息没带用户自己的话时，替用户提的要求
 IMAGE_REQUEST = "请看看这张图片，说说上面是什么内容"
 FILE_REQUEST = "请看看这个文件，说说主要内容"
@@ -82,127 +80,120 @@ def _clean_content(content: str, mention: str = "") -> str:
     return content.strip()
 
 
+def _instructions(ctx: RunContext[AgentDeps]) -> str:
+    return ctx.deps.instructions
+
+
+def _last_tool_result(messages: list[ModelMessage]) -> str:
+    for message in reversed(messages):
+        for part in reversed(message.parts):
+            if isinstance(part, ToolReturnPart):
+                return str(part.content)
+    return ""
+
+
+def _tool_rounds(messages: list[ModelMessage]) -> int:
+    return sum(1 for m in messages if isinstance(m, ModelResponse) and any(isinstance(p, ToolCallPart) for p in m.parts))
+
+
+@dataclass
+class Turn:
+    """一次思考的结果：结局、会话（没开始就失败时为空）、这轮调技能的过程"""
+    ending: Ending
+    session: Optional[Session] = None
+    steps: list[ModelMessage] = field(default_factory=list)
+
+
 class AgentLoop:
     """Agent 执行引擎（单例使用）"""
 
-    def __init__(self):
-        self.llm_router = get_llm_router()
-        self.session_manager = get_session_manager()
+    def __init__(self, llm_router=None, session_manager=None):
+        self.llm_router = llm_router or get_llm_router()
+        self.session_manager = session_manager or get_session_manager()
+        # 模型每条消息现取（tl-admin 改了立即生效），工具每条消息按权限现筛
+        self.agent = Agent(output_type=str | None, deps_type=AgentDeps, instructions=_instructions,
+                           retries=TOOL_ARG_RETRIES, defer_model_check=True, name="tl-ai")
 
     async def run(self, msg: ChatMsg) -> None:
         """处理一条消息：_think 得出结局，finish 统一收尾"""
         # 会话按机器人隔离：同名的群在不同的号里是不同的会话；用户画像跟着会话走（每个群一份、私聊一份）
         session_chat = msg.chat_id if msg.is_group else msg.sender_id
         session_id = f"{msg.bot_id}:{session_chat}"
-        receiver, at_user, _ = _route(msg)
         auto = is_auto_triggered(msg)
 
         LOG.info("AgentLoop.run: bot_id=%s platform=%s sender_id=%s sender_name=%s session=%s type=%s auto=%s",
                  msg.bot_id, msg.platform, msg.sender_id, msg.sender_name or msg.sender_id, session_id,
                  msg.msg_type, auto)
 
-        # 没人叫它、自动接话时不发技能的"正在…"提示，免得群里一张图刷两条
-        ending, session = await self._think(msg, session_id, session_chat, receiver, at_user,
-                                            notify=not auto, auto=auto)
-        await self.finish(msg, ending, session)
+        turn = await self._think(msg, session_id, session_chat, auto)
+        await self.finish(msg, turn.ending, turn.session, turn.steps)
 
-    async def _think(self, msg: ChatMsg, session_id: str, session_chat: str, receiver: str, at_user: str,
-                     notify: bool, auto: bool):
-        """跑一遍 LLM + 技能循环，返回 (结局, 会话)；不发任何消息，发不发、发什么由 finish 统一决定"""
-        platform, bot_id, sender_id = msg.platform, msg.bot_id, msg.sender_id
-        sender_name = msg.sender_name or sender_id
-        is_group = msg.is_group
+    async def _think(self, msg: ChatMsg, session_id: str, session_chat: str, auto: bool) -> Turn:
+        """跑一遍 LLM + 技能循环，得出结局；不发回复，发不发、发什么由 finish 统一决定"""
+        content = await self._build_user_content(msg)
+        if not content:
+            return Turn(Ending(Outcome.UNREADABLE))
 
-        # 构建用户侧消息内容
-        user_content = self._build_user_content(msg)
-        if not user_content:
-            return Ending(Outcome.UNREADABLE), None
+        sender_name = msg.sender_name or msg.sender_id
+        user_ctx = get_user_context(session_id, msg.sender_id)
+        session = self.session_manager.get_or_create(session_id)
+        text = prompt.stored_text(content, sender_name, msg.is_group)
+        summary, history = session.start_turn(text)
 
-        # 获取用户画像并注入 session
-        user_ctx = get_user_context(session_id, sender_id)
-        # 人设按"这个机器人里的这个群或人"选，名字用 base 带来的昵称
-        session = self.session_manager.get_or_create(session_id, user_ctx=user_ctx, bot_id=bot_id,
-                                                     chat=session_chat, bot_name=msg.bot_name)
-        session.add_message("user", user_content)
+        receiver, at_user, _ = _route(msg)
+        chat = msg.chat_id if msg.is_group else ""
+        # 人设按"这个机器人里的这个群或人"选，名字用 base 带来的昵称；每次现查，tl-admin 改了下一条就生效
+        persona = persona_service.resolve(msg.bot_id, session_chat, msg.bot_name).prompt
+        deps = AgentDeps(
+            skill_ctx={
+                "session_id": session_id, "sender_id": msg.sender_id, "sender_name": sender_name,
+                "is_group": msg.is_group, "receiver": receiver, "at_user": at_user, "platform": msg.platform,
+                "bot_id": msg.bot_id,
+                # 权限点按群匹配用；私聊为空
+                "chat": chat,
+            },
+            # 权限点按平台、号、群、人匹配
+            access={"platform": msg.platform, "bot_id": msg.bot_id, "sender_id": msg.sender_id,
+                    "is_group": msg.is_group, "chat": chat},
+            instructions=prompt.instructions(persona, summary),
+            # 没人叫它、自动接话时不发技能的"正在…"提示，免得群里一张图刷两条
+            notify=not auto,
+            max_tool_rounds=MAX_TOOL_ITERATIONS,
+        )
+        try:
+            result = await self.agent.run(
+                prompt.live_prompt(text, sender_name=sender_name, user_ctx=user_ctx, auto=auto),
+                message_history=history,
+                deps=deps,
+                model=self.llm_router.agent_model(),
+                toolsets=[build_toolset()],
+                usage_limits=UsageLimits(request_limit=MAX_MODEL_REQUESTS),
+            )
+        except UsageLimitExceeded as e:
+            LOG.warning("AgentLoop 超过最大请求次数 (%d): %s", MAX_MODEL_REQUESTS, e)
+            return Turn(Ending(Outcome.TOO_MANY_ROUNDS, detail=str(e)[:200]), session)
+        except Exception as e:
+            LOG.exception("LLM 调用失败: %s", e)
+            return Turn(Ending(Outcome.LLM_ERROR, detail=repr(e)[:200]), session)
 
-        # 获取当前用户在这里有权限使用的 tools（权限点按平台、号、群、人匹配）
-        access = {"platform": platform, "bot_id": bot_id, "sender_id": sender_id, "is_group": is_group,
-                  "chat": msg.chat_id if is_group else ""}
-        tools = skill_registry.get_all_tool_schemas(access)
+        steps = result.new_messages()
+        if _tool_rounds(steps) >= MAX_TOOL_ITERATIONS:
+            LOG.warning("技能调用到了 %d 轮上限，模型按已有结果直接回答", MAX_TOOL_ITERATIONS)
+        ending = outcome.from_model_reply(result.output, _last_tool_result(steps), auto, deps.unrecovered_failures())
+        return Turn(ending, session, steps)
 
-        # 开始 Agent Loop
-        messages = session.get_messages_for_llm(access)
-        if auto:
-            # 只告诉这一次调用，不写进会话历史
-            messages = [*messages, {"role": "user", "content": AUTO_REPLY_RULE}]
-        last_tool_result = ""
-        # 失败了的技能，有的话结局记成 tool_failed
-        failed_tools: list[str] = []
-
-        for iteration in range(MAX_TOOL_ITERATIONS):
-            try:
-                result_type, result = await self.llm_router.chat_for_agent(
-                    messages=messages,
-                    tools=tools,
-                )
-            except Exception as e:
-                LOG.exception("LLM 调用失败 (iteration=%d): %s", iteration, e)
-                return Ending(Outcome.LLM_ERROR, detail=repr(e)[:200]), session
-
-            if result_type == "text":
-                return outcome.from_model_reply(result, last_tool_result, auto, failed_tools), session
-
-            # result_type == "tool_calls"
-            tool_calls = result
-            LOG.info("LLM 请求执行 %d 个 tool (iteration=%d)", len(tool_calls), iteration)
-
-            # 1. 把 assistant 的 tool_calls 消息追加到 messages
-            messages.append({
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc["arguments"], ensure_ascii=False),
-                        },
-                    }
-                    for tc in tool_calls
-                ],
-            })
-
-            # 2. 并行执行所有 tool，把结果追加到 messages
-            tool_results = await asyncio.gather(*[
-                self._execute_tool(tc, session_id, sender_id, sender_name, is_group, receiver, at_user, platform,
-                                   bot_id, notify=notify)
-                for tc in tool_calls
-            ])
-            for tc, (tool_result, failed) in zip(tool_calls, tool_results):
-                last_tool_result = tool_result
-                if failed:
-                    failed_tools.append(tc["name"])
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "content": tool_result,
-                })
-
-        LOG.warning("AgentLoop 超过最大迭代次数 (%d)", MAX_TOOL_ITERATIONS)
-        return Ending(Outcome.TOO_MANY_ROUNDS), session
-
-    async def finish(self, msg: ChatMsg, ending: Ending, session=None) -> None:
+    async def finish(self, msg: ChatMsg, ending: Ending, session: Optional[Session] = None,
+                     steps: Optional[list[ModelMessage]] = None) -> None:
         """
         一条消息的唯一收口：按结局决定发不发、发什么，打一行"回复结局"日志
 
-        发出去的话记进会话历史；没发的（不回、自动触发时的各种兜底）不记。
+        发出去的话连同这轮调技能的过程记进会话历史；没发的（不回、自动触发时的各种兜底）不记。
         """
         auto = is_auto_triggered(msg)
         text = outcome.text_to_send(ending, auto)
         if text:
             if session is not None:
-                session.add_message("assistant", text)
+                session.finish_turn(text, steps)
             receiver, at_user, reply_msg_id = _route(msg)
             sent = await self._send_reply(receiver, text, at_user, reply_msg_id)
         else:
@@ -210,7 +201,7 @@ class AgentLoop:
         outcome.log_outcome(ending, bot_id=msg.bot_id, chat_id=msg.chat_id, sender_id=msg.sender_id,
                             msg_type=msg.msg_type, auto=auto, sent=bool(sent))
 
-    def _build_user_content(self, msg: ChatMsg) -> Optional[str]:
+    async def _build_user_content(self, msg: ChatMsg) -> Optional[str]:
         """把各类消息类型转换为 LLM 可理解的文本"""
         msg_type = msg.msg_type
         content = _clean_content(msg.content, msg.mention)
@@ -218,7 +209,7 @@ class AgentLoop:
         if msg_type == "text":
             url = self._extract_first_link(content)
             if url:
-                crawled = self._crawl_content(url)
+                crawled = await link_reader.read(url)
                 if crawled:
                     return f"{content}\n\n[链接内容]\n{crawled}"
             return content or None
@@ -238,7 +229,7 @@ class AgentLoop:
         if msg_type == "link":
             url = msg.link_msg.url if msg.link_msg else ""
             if url:
-                crawled = self._crawl_content(url)
+                crawled = await link_reader.read(url)
                 desc = content or "请分析这个链接"
                 return f"{desc}\n\n[链接内容]\n{crawled}" if crawled else f"{desc} {url}"
             return content or None
@@ -279,74 +270,10 @@ class AgentLoop:
 
         return content or None
 
-    async def _execute_tool(
-            self,
-            tool_call: dict,
-            session_id: str,
-            sender_id: str,
-            sender_name: str,
-            is_group: bool,
-            receiver: str,
-            at_user: str,
-            platform: str,
-            bot_id: str,
-            notify: bool = True,
-    ) -> tuple[str, bool]:
-        """执行单个 tool，返回 (回给模型的结果, 是否失败)；notify 为 False 时不发技能的预通知"""
-        name = tool_call["name"]
-        args = tool_call["arguments"]
-        if tool_call.get("arguments_error"):
-            # 参数都没解析出来，不执行，让模型改好参数再调（router 已记日志）
-            return f"[参数错误] 技能 {name} 没有执行：{tool_call['arguments_error']}，请按参数说明重新调用", False
-        LOG.info("执行 tool: %s, args=%s", name, str(args)[:200])
-
-        ctx = {
-            "session_id": session_id,
-            "sender_id": sender_id,
-            "sender_name": sender_name,
-            "is_group": is_group,
-            "receiver": receiver,
-            "at_user": at_user,
-            "platform": platform,
-            "bot_id": bot_id,
-            # 权限点按群匹配用；私聊为空
-            "chat": receiver if is_group else "",
-        }
-
-        try:
-            notify_msg = skill_registry.get_notify(name) if notify else None
-            if notify_msg:
-                import random
-                from true_love_ai.agent.server_client import send_text
-                msg = random.choice(notify_msg) if isinstance(notify_msg, list) else notify_msg
-                if not await send_text(receiver, msg, at_user):
-                    LOG.warning("tool %s 的预通知没发出去: receiver=%s", name, receiver)
-
-            result = await asyncio.wait_for(
-                skill_registry.execute(name, args, ctx),
-                timeout=skill_registry.get_timeout(name, SKILL_TIMEOUT_SECONDS),
-            )
-            LOG.info("tool %s 执行结果: %s", name, str(result)[:200])
-            return str(result), False
-        except asyncio.TimeoutError:
-            LOG.error("tool %s 执行超时 (%ds)", name, skill_registry.get_timeout(name, SKILL_TIMEOUT_SECONDS))
-            return f"[执行超时] 技能 {name} 处理时间过长，请稍后重试", True
-        except skill_registry.SkillFailed as e:
-            # 包了原异常的带上堆栈；技能自己判定的失败（比如发送接口返回失败）原因已经在话里了
-            LOG.error("tool %s 失败: %s", name, e, exc_info=e.__cause__ is not None)
-            return str(e), True
-        except Exception as e:
-            from true_love_ai.agent.skills.permission import PermissionDenied
-            if isinstance(e, PermissionDenied):
-                return str(e), False
-            LOG.exception("tool %s 执行异常: %s", name, e)
-            return f"[执行失败] {e}", True
-
     async def _send_reply(self, receiver: str, content: str, at_user: str, reply_msg_id: str = "") -> bool:
         """通过 Server 发送最终回复，返回是否发出去了"""
-        from true_love_ai.agent.server_client import send_text
         try:
-            ok = await send_text(receiver, content, at_user, reply_msg_id)
+            ok = await server_client.send_text(receiver, content, at_user, reply_msg_id)
             if not ok:
                 LOG.error("发送回复失败: receiver=%s", receiver)
             return ok
@@ -358,10 +285,6 @@ class AgentLoop:
     def _extract_first_link(text: str) -> Optional[str]:
         match = re.search(r"https?://[^\s]+", text)
         return match.group() if match else None
-
-    @staticmethod
-    def _crawl_content(url: str) -> str:
-        return link_reader.read(url)
 
 
 # 全局单例

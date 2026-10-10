@@ -57,6 +57,8 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
 markers = ["e2e: runs real tl-server and tl-ai processes (TL_E2E=0 skips them)"]
+# a test whose coroutine never ran must fail, not pass silently
+filterwarnings = ["error::RuntimeWarning", "error::pytest.PytestUnraisableExceptionWarning"]
 
 [tool.ruff]
 line-length = 100

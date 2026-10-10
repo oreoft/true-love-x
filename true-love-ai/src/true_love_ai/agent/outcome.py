@@ -9,9 +9,9 @@ AgentLoop 处理一条消息，最后一定落到下面某一种结局，发不�
     replied           模型正常给出回复                       → 发模型的回复
     skipped           自动触发时模型觉得没什么可说，回了 SKIP_MARKER → 不发
     empty_fallback    模型回了空                             → 发技能结果，没有就发兜底话
-    tool_failed       有技能失败了（抛异常、超时），模型据此回复     → 发模型的回复，模型回空就发技能结果或兜底话
+    tool_failed       有技能失败了（抛异常、超时）且没重试成功，模型据此回复 → 发模型的回复，模型回空就发技能结果或兜底话
     llm_error         调模型报错                             → 发兜底话
-    too_many_rounds   技能调用轮次超上限                       → 发兜底话
+    too_many_rounds   模型请求次数超上限（技能轮次到上限后模型仍不回答）→ 发兜底话
     unreadable        消息里没有能交给模型的内容                 → 发兜底话
     crashed           处理过程中抛了没预料到的异常                → 发兜底话
 
@@ -60,12 +60,16 @@ class Ending:
 
 def from_model_reply(reply: Optional[str], last_tool_result: str, auto: bool,
                      failed_tools: Sequence[str] = ()) -> Ending:
-    """模型最后给出的文字落到哪种结局；failed_tools 是这条消息里失败了的技能"""
+    """
+    模型最后给出的文字落到哪种结局
+
+    failed_tools 是这条消息里失败了、之后也没重试成功的技能；重试成功了的不算失败，自动触发时模型的回答照样发。
+    """
     text = (reply or "").strip()
-    if failed_tools:
-        return Ending(Outcome.TOOL_FAILED, text=reply if text else last_tool_result, detail=",".join(failed_tools))
     if auto and SKIP_MARKER in text:
         return Ending(Outcome.SKIPPED, detail=text[:100])
+    if failed_tools:
+        return Ending(Outcome.TOOL_FAILED, text=reply if text else last_tool_result, detail=",".join(failed_tools))
     if not text:
         return Ending(Outcome.EMPTY_FALLBACK, text=last_tool_result)
     return Ending(Outcome.REPLIED, text=reply)

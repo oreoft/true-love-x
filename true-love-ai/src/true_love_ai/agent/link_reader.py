@@ -7,6 +7,7 @@ Link Reader - 读链接的正文，交给模型
   小红书直接请求只有登录页，Firecrawl 读得到；微信里复制出来的有时是登录跳转地址，先还原成原笔记地址
 
 读不到返回空串，调用方只用消息里原有的标题和链接。
+请求都是异步的：一个链接读上几十秒，别的消息照常处理。
 """
 
 import html
@@ -15,7 +16,7 @@ import re
 from urllib.parse import parse_qs, urlparse
 
 from bs4 import BeautifulSoup
-from true_love_common.http.client import get, post_json
+from true_love_common.http.client import async_get, async_post_json
 
 from true_love_ai.core.config import get_config
 
@@ -27,7 +28,7 @@ BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
 
-def read(url: str) -> str:
+async def read(url: str) -> str:
     """链接的标题和正文，最多 MAX_CHARS 字；读不到返回空串"""
     if not url:
         return ""
@@ -35,9 +36,9 @@ def read(url: str) -> str:
     host = (urlparse(url).hostname or "").lower()
     try:
         if host == "mp.weixin.qq.com":
-            text = _read_wechat_article(url)
+            text = await _read_wechat_article(url)
         else:
-            text = _read_with_firecrawl(url)
+            text = await _read_with_firecrawl(url)
     except Exception as e:
         LOG.warning("读链接失败: url=%s err=%s", url, e)
         return ""
@@ -56,8 +57,8 @@ def _unwrap_login(url: str) -> str:
     return url
 
 
-def _read_wechat_article(url: str) -> str:
-    result = get(url, headers={"User-Agent": BROWSER_UA}, timeout=30, follow_redirects=True)
+async def _read_wechat_article(url: str) -> str:
+    result = await async_get(url, headers={"User-Agent": BROWSER_UA}, timeout=30, follow_redirects=True)
     if not result.ok:
         LOG.warning("公众号文章请求失败: url=%s status=%s err=%s", url, result.status_code, result.error)
         return ""
@@ -73,13 +74,13 @@ def _read_wechat_article(url: str) -> str:
     return text
 
 
-def _read_with_firecrawl(url: str) -> str:
+async def _read_with_firecrawl(url: str) -> str:
     key = get_config().platform_key.firecrawl_api_key
     if not key:
         LOG.info("没配 Firecrawl key，不读链接: %s", url)
         return ""
-    result = post_json(FIRECRAWL_URL, {"url": url, "formats": ["markdown"], "onlyMainContent": True},
-                       headers={"Authorization": f"Bearer {key}"}, timeout=60)
+    result = await async_post_json(FIRECRAWL_URL, {"url": url, "formats": ["markdown"], "onlyMainContent": True},
+                                   headers={"Authorization": f"Bearer {key}"}, timeout=60)
     data = result.data if isinstance(result.data, dict) else {}
     if not result.ok or not data.get("success"):
         LOG.warning("Firecrawl 读取失败: url=%s status=%s err=%s", url, result.status_code,

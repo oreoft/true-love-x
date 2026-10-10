@@ -1,39 +1,10 @@
-"""Conversations belong to a bot, and so does the persona that answers in them."""
+"""Calls to the server name the bot that is replying (conversations per bot are in test_agent_loop)."""
 
 import types
 import unittest
 from unittest.mock import AsyncMock, patch
 
-from true_love_common.chat_msg import ChatMsg
-
-from true_love_ai.agent import agent_loop, server_client
-
-
-class Stop(Exception):
-    """Ends the agent loop right after it picks the conversation"""
-
-
-class SessionKeyTests(unittest.IsolatedAsyncioTestCase):
-    async def test_same_group_on_two_bots_is_two_conversations(self):
-        created = []
-
-        def get_or_create(session_id, user_ctx=None, bot_id="", chat="", bot_name=""):
-            created.append((session_id, bot_id, chat, bot_name))
-            raise Stop()
-
-        loop = agent_loop.AgentLoop.__new__(agent_loop.AgentLoop)
-        loop.session_manager = types.SimpleNamespace(get_or_create=get_or_create)
-
-        for bot_id in ("wxid_m8s", "wxid_ser"):
-            msg = ChatMsg(bot_id=bot_id, bot_name=f"name of {bot_id}", platform="wechat", chat_id="群A",
-                          sender_id="alice", is_group=True, content="hi")
-            with patch.object(agent_loop, "get_user_context", return_value=None) as user_ctx:
-                with self.assertRaises(Stop):
-                    await loop.run(msg)
-            user_ctx.assert_called_once_with(f"{bot_id}:群A", "alice")
-
-        self.assertEqual(created, [("wxid_m8s:群A", "wxid_m8s", "群A", "name of wxid_m8s"),
-                                   ("wxid_ser:群A", "wxid_ser", "群A", "name of wxid_ser")])
+from true_love_ai.agent import server_client
 
 
 class ServerClientTests(unittest.IsolatedAsyncioTestCase):
