@@ -21,6 +21,18 @@ AGENT_LLM_TIMEOUT_SECONDS = 120
 # 工具定义原样发给 LiteLLM：pydantic_ai 默认会按模型改写 JSON schema（给无参数的工具补上空的 properties 等），
 # 技能 schema 是按改造前直接发给模型的样子写的
 _AGENT_MODEL_PROFILE = {"json_schema_transformer": None}
+# Claude 不会自动缓存前缀，要显式标 cache_control；让 LiteLLM 给 system（人设、规则、摘要）打上。
+# OpenAI、Gemini 自动缓存前缀，不加
+_CACHE_SYSTEM_PROMPT = {"extra_body": {"cache_control_injection_points": [{"location": "message", "role": "system"}]}}
+
+
+def _needs_cache_control(model_name: str) -> bool:
+    return "claude" in model_name.lower() or model_name.startswith("anthropic/")
+
+
+def _agent_chat_model(model_name: str, provider: LiteLLMProvider) -> OpenAIChatModel:
+    settings = _CACHE_SYSTEM_PROMPT if _needs_cache_control(model_name) else None
+    return OpenAIChatModel(model_name, provider=provider, profile=_AGENT_MODEL_PROFILE, settings=settings)
 
 
 def get_openai_client() -> AsyncOpenAI:
@@ -63,11 +75,11 @@ class LLMRouter:
         provider = LiteLLMProvider(openai_client=client)
         primary_name = self._model("chat")
         fallback_name = self._model("chat", "fallback")
-        primary = OpenAIChatModel(primary_name, provider=provider, profile=_AGENT_MODEL_PROFILE)
+        primary = _agent_chat_model(primary_name, provider)
         LOG.info("agent: model=%s fallback=%s", primary_name, fallback_name or "-")
         if not fallback_name or fallback_name == primary_name:
             return primary
-        return FallbackModel(primary, OpenAIChatModel(fallback_name, provider=provider, profile=_AGENT_MODEL_PROFILE))
+        return FallbackModel(primary, _agent_chat_model(fallback_name, provider))
 
     async def vision(
             self,

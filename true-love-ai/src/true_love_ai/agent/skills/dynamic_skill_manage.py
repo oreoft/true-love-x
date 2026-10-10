@@ -23,20 +23,32 @@ _EXEC_TIMEOUT = 30
 _OUTPUT_LIMIT = 2000
 
 
+# 模型传来的参数值里不许有的字符：shell 元字符、引号、换行。
+# 值本身以环境变量交给 shell，外层 shell 不会解析它；但模板里要是再套一层解释器（bash -c '...{x}'、ssh、eval），
+# 值会在里面被重新解析，所以这些字符一律不收
+_UNSAFE_VALUE = re.compile(r"""[;&|`$()<>\\'"\n\r\x00]""")
+_NUMBER = re.compile(r"-\d+(\.\d+)?")
+
+
 def _build_command(command: str, param_defs: dict, overrides: dict) -> tuple[str, dict[str, str]]:
     """
     命令模板里的 {name} 换成对环境变量的引用，参数值放进环境变量：返回 (命令, 环境变量)
 
-    参数值不拼进命令文本，shell 不会把它当命令解析，换行、引号、$()、反引号都只是普通字符。
-    以 - 开头的值会被命令当成选项（比如 curl -o 写文件），直接拒绝。Raises: ValueError
+    参数值不拼进命令文本，换行、引号、$()、空格都不会被外层 shell 当成命令或拆成多个参数。
+    模型传来的值另外按 _UNSAFE_VALUE 拦一遍；以 - 开头的值（负数除外）会被命令当成选项（比如 curl -o 写文件），也拒绝。
+    默认值是保存技能的人写的，不拦。Raises: ValueError
     """
     values = {k: str(v.get("default", "")) if isinstance(v, dict) else "" for k, v in param_defs.items()}
-    values.update({k: str(v) for k, v in overrides.items()})
+    for name, value in overrides.items():
+        value = str(value)
+        if _UNSAFE_VALUE.search(value):
+            raise ValueError(f"参数 '{name}' 的值包含不允许的字符（引号、换行或 ;&|`$()<>\\）")
+        if value.startswith("-") and not _NUMBER.fullmatch(value):
+            raise ValueError(f"参数 '{name}' 不能以 - 开头")
+        values[name] = value
     env: dict[str, str] = {}
     var_of: dict[str, str] = {}
     for i, (name, value) in enumerate(values.items()):
-        if value.startswith("-"):
-            raise ValueError(f"参数 '{name}' 不能以 - 开头")
         var_of[name] = f"TL_ARG_{i}"
         env[var_of[name]] = value
     return _reference_vars(command, var_of), env

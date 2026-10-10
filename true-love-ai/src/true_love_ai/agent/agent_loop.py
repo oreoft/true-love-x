@@ -21,13 +21,14 @@ from typing import Optional
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ToolReturnPart
+from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import UsageLimits
 from true_love_common.chat_msg import ChatMsg
 
 from true_love_ai.agent import link_reader, outcome, prompt, server_client
 from true_love_ai.agent.outcome import Ending, Outcome
-from true_love_ai.agent.tools import TOOL_ARG_RETRIES, AgentDeps, build_toolset
-from true_love_ai.core.session import Session, get_session_manager
+from true_love_ai.agent.tools import TOOL_ARG_RETRIES, AgentDeps, SkillToolset, has_any_skill
+from true_love_ai.core.session import Session, get_session_manager, without_tool_steps
 from true_love_ai.llm.router import get_llm_router
 from true_love_ai.memory import persona_service
 from true_love_ai.memory.memory_manager import get_user_context
@@ -84,6 +85,15 @@ def _instructions(ctx: RunContext[AgentDeps]) -> str:
     return ctx.deps.instructions
 
 
+def _model_settings(ctx: RunContext[AgentDeps]) -> ModelSettings:
+    """
+    技能轮次用完后让模型别再调技能、直接回答
+
+    工具定义照常带上：历史里有工具调用时，有的模型（比如 Claude）要求请求里也有工具定义；前缀不变也利于缓存
+    """
+    return {"tool_choice": "none"} if ctx.deps.rounds_used_up(ctx.run_step) else {}
+
+
 def _last_tool_result(messages: list[ModelMessage]) -> str:
     for message in reversed(messages):
         for part in reversed(message.parts):
@@ -98,9 +108,10 @@ def _tool_rounds(messages: list[ModelMessage]) -> int:
 
 @dataclass
 class Turn:
-    """一次思考的结果：结局、会话（没开始就失败时为空）、这轮调技能的过程"""
+    """一次思考的结果：结局、会话和这次用户的话（没开始就失败时为空）、这轮调技能的过程"""
     ending: Ending
     session: Optional[Session] = None
+    user_text: str = ""
     steps: list[ModelMessage] = field(default_factory=list)
 
 
@@ -110,9 +121,10 @@ class AgentLoop:
     def __init__(self, llm_router=None, session_manager=None):
         self.llm_router = llm_router or get_llm_router()
         self.session_manager = session_manager or get_session_manager()
-        # 模型每条消息现取（tl-admin 改了立即生效），工具每条消息按权限现筛
+        # 模型每条消息现取（tl-admin 改了立即生效），工具每一步按权限现筛（见 SkillToolset）
         self.agent = Agent(output_type=str | None, deps_type=AgentDeps, instructions=_instructions,
                            retries=TOOL_ARG_RETRIES, defer_model_check=True, name="tl-ai")
+        self.toolset = SkillToolset()
 
     async def run(self, msg: ChatMsg) -> None:
         """处理一条消息：_think 得出结局，finish 统一收尾"""
@@ -126,7 +138,7 @@ class AgentLoop:
                  msg.msg_type, auto)
 
         turn = await self._think(msg, session_id, session_chat, auto)
-        await self.finish(msg, turn.ending, turn.session, turn.steps)
+        await self.finish(msg, turn.ending, turn)
 
     async def _think(self, msg: ChatMsg, session_id: str, session_chat: str, auto: bool) -> Turn:
         """跑一遍 LLM + 技能循环，得出结局；不发回复，发不发、发什么由 finish 统一决定"""
@@ -138,10 +150,14 @@ class AgentLoop:
         user_ctx = get_user_context(session_id, msg.sender_id)
         session = self.session_manager.get_or_create(session_id)
         text = prompt.stored_text(content, sender_name, msg.is_group)
-        summary, history = session.start_turn(text)
+        summary, history = session.history()
 
         receiver, at_user, _ = _route(msg)
         chat = msg.chat_id if msg.is_group else ""
+        access = {"platform": msg.platform, "bot_id": msg.bot_id, "sender_id": msg.sender_id,
+                  "is_group": msg.is_group, "chat": chat}
+        if not has_any_skill(access):
+            history = without_tool_steps(history)
         # 人设按"这个机器人里的这个群或人"选，名字用 base 带来的昵称；每次现查，tl-admin 改了下一条就生效
         persona = persona_service.resolve(msg.bot_id, session_chat, msg.bot_name).prompt
         deps = AgentDeps(
@@ -153,8 +169,7 @@ class AgentLoop:
                 "chat": chat,
             },
             # 权限点按平台、号、群、人匹配
-            access={"platform": msg.platform, "bot_id": msg.bot_id, "sender_id": msg.sender_id,
-                    "is_group": msg.is_group, "chat": chat},
+            access=access,
             instructions=prompt.instructions(persona, summary),
             # 没人叫它、自动接话时不发技能的"正在…"提示，免得群里一张图刷两条
             notify=not auto,
@@ -166,34 +181,35 @@ class AgentLoop:
                 message_history=history,
                 deps=deps,
                 model=self.llm_router.agent_model(),
-                toolsets=[build_toolset()],
+                model_settings=_model_settings,
+                toolsets=[self.toolset],
                 usage_limits=UsageLimits(request_limit=MAX_MODEL_REQUESTS),
             )
         except UsageLimitExceeded as e:
             LOG.warning("AgentLoop 超过最大请求次数 (%d): %s", MAX_MODEL_REQUESTS, e)
-            return Turn(Ending(Outcome.TOO_MANY_ROUNDS, detail=str(e)[:200]), session)
+            # 已经执行过的技能照样记进历史，免得下一轮又办一遍
+            return Turn(Ending(Outcome.TOO_MANY_ROUNDS, detail=str(e)[:200]), session, text, deps.executed_steps())
         except Exception as e:
             LOG.exception("LLM 调用失败: %s", e)
-            return Turn(Ending(Outcome.LLM_ERROR, detail=repr(e)[:200]), session)
+            return Turn(Ending(Outcome.LLM_ERROR, detail=repr(e)[:200]), session, text, deps.executed_steps())
 
         steps = result.new_messages()
         if _tool_rounds(steps) >= MAX_TOOL_ITERATIONS:
             LOG.warning("技能调用到了 %d 轮上限，模型按已有结果直接回答", MAX_TOOL_ITERATIONS)
         ending = outcome.from_model_reply(result.output, _last_tool_result(steps), auto, deps.unrecovered_failures())
-        return Turn(ending, session, steps)
+        return Turn(ending, session, text, steps)
 
-    async def finish(self, msg: ChatMsg, ending: Ending, session: Optional[Session] = None,
-                     steps: Optional[list[ModelMessage]] = None) -> None:
+    async def finish(self, msg: ChatMsg, ending: Ending, turn: Optional[Turn] = None) -> None:
         """
         一条消息的唯一收口：按结局决定发不发、发什么，打一行"回复结局"日志
 
-        发出去的话连同这轮调技能的过程记进会话历史；没发的（不回、自动触发时的各种兜底）不记。
+        这一轮记进会话历史：发出去的话连同调技能的过程；没发的（不回、自动触发时的各种兜底）只记用户说的话。
         """
         auto = is_auto_triggered(msg)
         text = outcome.text_to_send(ending, auto)
+        if turn is not None and turn.session is not None:
+            turn.session.record_turn(turn.user_text, text, turn.steps)
         if text:
-            if session is not None:
-                session.finish_turn(text, steps)
             receiver, at_user, reply_msg_id = _route(msg)
             sent = await self._send_reply(receiver, text, at_user, reply_msg_id)
         else:

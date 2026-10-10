@@ -12,17 +12,26 @@ from true_love_ai.agent.skill_registry import SkillFailed
 from true_love_ai.agent.skills import dynamic_skill_manage as dsm
 
 
-def shell(template: str, value: str, default: str = "d") -> str:
+def run(command: str, env: dict) -> str:
+    return subprocess.run(command, shell=True, capture_output=True, text=True, env={**os.environ, **env},
+                          timeout=5).stdout
+
+
+def shell(template: str, value: str | None, default: str = "d") -> str:
     command, env = dsm._build_command(template, {"w": {"default": default}}, {"w": value} if value is not None else {})
-    result = subprocess.run(command, shell=True, capture_output=True, text=True, env={**os.environ, **env}, timeout=5)
-    return result.stdout
+    return run(command, env)
 
 
-class ParameterTests(unittest.TestCase):
+def raw_shell(template: str, value: str) -> str:
+    """Only the quoting layer: the value goes straight into the environment, skipping the value filter"""
+    return run(dsm._reference_vars(template, {"w": "TL_ARG_0"}), {"TL_ARG_0": value})
+
+
+class QuotingTests(unittest.TestCase):
+    """The outer shell never parses a value, whatever is in it"""
+
     def setUp(self):
-        self.dir = Path(tempfile.mkdtemp())
-        self.marker = self.dir / "pwned"
-        self.addCleanup(lambda: self.marker.unlink(missing_ok=True))
+        self.marker = Path(tempfile.mkdtemp()) / "pwned"
 
     def test_values_that_try_to_run_commands_stay_plain_text(self):
         payloads = [
@@ -41,7 +50,7 @@ class ParameterTests(unittest.TestCase):
         for template in templates:
             for payload in payloads:
                 with self.subTest(template=template, payload=payload):
-                    out = shell(template, payload)
+                    out = raw_shell(template, payload)
                     self.assertFalse(self.marker.exists(), f"{template!r} with {payload!r} ran a command")
                     self.assertIn(payload, out)
 
@@ -54,19 +63,35 @@ class ParameterTests(unittest.TestCase):
         self.assertEqual(shell("echo 'https://x.test/q?s={w}&n=1'", "a b"), "https://x.test/q?s=a b&n=1\n")
         self.assertEqual(shell('echo "https://x.test/q?s={w}&n=$((1+1))"', "a"), "https://x.test/q?s=a&n=2\n")
 
-    def test_defaults_are_used_when_the_model_passes_nothing(self):
-        self.assertEqual(shell("echo hello-{w}", None, default="world"), "hello-world\n")
-
-    def test_option_like_values_are_refused(self):
-        with self.assertRaises(ValueError):
-            dsm._build_command("curl {w}", {"w": {}}, {"w": "-o/etc/x"})
-
     def test_escaped_quotes_in_the_template_do_not_confuse_the_quoting(self):
-        self.assertEqual(shell("echo \\'{w}", f"; touch {self.marker}"), f"'; touch {self.marker}\n")
+        self.assertEqual(raw_shell("echo \\'{w}", f"; touch {self.marker}"), f"'; touch {self.marker}\n")
         self.assertFalse(self.marker.exists())
 
     def test_other_braces_in_the_template_are_left_alone(self):
         self.assertEqual(shell("echo {w} {other} ${HOME:+x}", "a"), "a {other} x\n")
+
+
+class ValueFilterTests(unittest.TestCase):
+    """A template may hand the value to another interpreter (bash -c, ssh, eval), so risky characters are refused"""
+
+    def test_shell_characters_quotes_and_newlines_are_refused(self):
+        for value in ("a;b", "a&b", "a|b", "`id`", "$(id)", "$HOME", "a>b", "a<b", "a\\b", "it's", 'say "hi"',
+                      "a\nb", "a\rb"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                dsm._build_command("bash -c 'echo {w}'", {"w": {}}, {"w": value})
+
+    def test_a_nested_interpreter_gets_ordinary_values(self):
+        self.assertEqual(shell("bash -c 'echo got-{w}'", "hello world"), "got-hello world\n")
+
+    def test_option_like_values_are_refused_but_negative_numbers_are_fine(self):
+        with self.assertRaises(ValueError):
+            dsm._build_command("curl {w}", {"w": {}}, {"w": "-o/etc/x"})
+        self.assertEqual(shell("echo {w}", "-3"), "-3\n")
+        self.assertEqual(shell("echo {w}", "-2.5"), "-2.5\n")
+
+    def test_defaults_are_trusted_and_used_when_the_model_passes_nothing(self):
+        self.assertEqual(shell("echo hello-{w}", None, default="world"), "hello-world\n")
+        self.assertEqual(shell("echo {w}", None, default="-n5"), "-n5\n")
 
 
 class SkillRunTests(unittest.IsolatedAsyncioTestCase):
@@ -81,12 +106,14 @@ class SkillRunTests(unittest.IsolatedAsyncioTestCase):
     async def test_output_comes_back(self):
         self.assertEqual(await self.run_skill("echo got-{word}", {"word": "hi there"}), "got-hi there")
 
-    async def test_injection_through_skill_run_does_nothing(self):
+    async def test_injection_through_skill_run_is_refused(self):
         marker = Path(tempfile.mkdtemp()) / "pwned"
-        out = await self.run_skill("echo got-{word}", {"word": f"x\ntouch {marker}"})
+        for payload in (f"x\ntouch {marker}", f"x; touch {marker}"):
+            with self.subTest(payload=payload):
+                out = await self.run_skill("bash -c 'echo got-{word}'", {"word": payload})
 
-        self.assertFalse(marker.exists())
-        self.assertEqual(out, f"got-x\ntouch {marker}")
+                self.assertFalse(marker.exists())
+                self.assertIn("参数错误", out)
 
     async def test_refused_parameter_is_told_to_the_model(self):
         self.assertIn("参数错误", await self.run_skill("echo {word}", {"word": "--help"}))

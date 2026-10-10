@@ -7,6 +7,8 @@
     msg      用户说的话（role=user）、发出去的回复（role=assistant），纯文本
     tools    一轮里模型调技能的过程（调了什么、技能回了什么），pydantic_ai 消息的 JSON，夹在这一轮的 user 和 assistant 之间
 
+一轮对话在处理完时一起写进去（append_turn），中间不会插进别的消息。
+
 压缩只按 id 删：删掉被摘要过的那一段，摘要期间新来的消息不受影响。
 """
 
@@ -33,14 +35,16 @@ class StoredRow:
 
 class SessionRepository:
 
-    def load(self, session_id: str, before_id: Optional[int] = None) -> tuple[Optional[str], list[StoredRow]]:
-        """会话的摘要和 msg、tools 行；before_id 只取它之前的行。读库失败当作空会话"""
+    def load(self, session_id: str) -> tuple[Optional[str], list[StoredRow]]:
+        """会话的摘要和 msg、tools 行。读库失败当作空会话"""
         try:
             with SessionLocal() as db:
-                query = db.query(SessionMessage).filter(SessionMessage.session_id == session_id)
-                if before_id is not None:
-                    query = query.filter((SessionMessage.id < before_id) | (SessionMessage.type == SUMMARY))
-                rows = query.order_by(SessionMessage.id).all()
+                rows = (
+                    db.query(SessionMessage)
+                    .filter(SessionMessage.session_id == session_id)
+                    .order_by(SessionMessage.id)
+                    .all()
+                )
         except Exception as e:
             LOG.exception("load session failed: session=%s err=%s", session_id, e)
             return None, []
@@ -79,16 +83,24 @@ class SessionRepository:
             LOG.exception("append_message failed: session=%s err=%s", session_id, e)
             return None
 
-    def append_turn(self, session_id: str, tools_json: Optional[str], reply: str) -> None:
-        """一轮的技能调用过程和发出去的回复，一起写，中间不会插进别的消息"""
+    def append_turn(self, session_id: str, user_text: str, tools_json: Optional[str], reply: Optional[str]) -> None:
+        """
+        一轮对话一起写：用户的话、技能调用过程（有的话）、发出去的回复（有的话）
+
+        一起写是为了同一个群里同时处理的两条消息不会交错成 用户A、用户B、技能A、回复A……，
+        那样技能调用就不紧跟在提问后面，有的模型会拒收这样的历史
+        """
         try:
             with SessionLocal() as db:
                 now = datetime.now()
+                db.add(SessionMessage(session_id=session_id, type=MSG, role="user", content=user_text,
+                                      created_at=now))
                 if tools_json:
                     db.add(SessionMessage(session_id=session_id, type=TOOLS, role=None, content=tools_json,
                                           created_at=now))
-                db.add(SessionMessage(session_id=session_id, type=MSG, role="assistant", content=reply,
-                                      created_at=now))
+                if reply:
+                    db.add(SessionMessage(session_id=session_id, type=MSG, role="assistant", content=reply,
+                                          created_at=now))
                 db.commit()
         except Exception as e:
             LOG.exception("append_turn failed: session=%s err=%s", session_id, e)

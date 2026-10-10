@@ -50,6 +50,10 @@ class Seen:
         return next(t for t in self.info.function_tools if t.name == name)
 
     @property
+    def tool_choice(self):
+        return (self.info.model_settings or {}).get("tool_choice")
+
+    @property
     def instructions(self) -> str:
         return self.info.instructions or ""
 

@@ -83,6 +83,25 @@ def tool_steps_json(steps: list[ModelMessage]) -> Optional[str]:
     return ModelMessagesTypeAdapter.dump_json(kept).decode()
 
 
+def without_tool_steps(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """
+    去掉历史里的技能调用过程，只留说过的话
+
+    给这次没有任何技能可用的人用：有的模型（比如 Claude）不接受"历史里有工具调用、这次却没给工具定义"的请求
+    """
+    kept: list[ModelMessage] = []
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            parts = [p for p in message.parts if not isinstance(p, ToolCallPart)]
+            if parts:
+                kept.append(ModelResponse(parts=parts))
+        else:
+            parts = [p for p in message.parts if not isinstance(p, (ToolReturnPart, RetryPromptPart))]
+            if parts:
+                kept.append(ModelRequest(parts=parts))
+    return kept
+
+
 def _render_for_summary(row: StoredRow) -> list[str]:
     if row.type == MSG:
         return [f"{row.role}: {row.content[:800]}"]
@@ -126,23 +145,22 @@ class Session:
     def is_expired(self) -> bool:
         return datetime.now() > self.updated_at + self.ttl
 
-    def start_turn(self, user_text: str) -> tuple[Optional[str], list[ModelMessage]]:
-        """
-        记下这次用户说的话，返回 (摘要, 这句话之前的历史)
-
-        先读历史再写这句话：这句话由调用方当作最新消息单独交给模型，不在历史里重复一遍。
-        """
+    def history(self) -> tuple[Optional[str], list[ModelMessage]]:
+        """(摘要, 之前的对话)，交给模型用"""
         self.updated_at = datetime.now()
-        repo = get_session_repo()
-        summary, rows = repo.load(self.session_id)
-        repo.append_message(self.session_id, "user", user_text)
-        self._maybe_compress()
+        summary, rows = get_session_repo().load(self.session_id)
         return summary, to_model_messages(rows)
 
-    def finish_turn(self, reply: str, tool_steps: Optional[list[ModelMessage]] = None) -> None:
-        """记下这轮发出去的回复，连同模型调技能的过程（有的话）"""
+    def record_turn(self, user_text: str, reply: Optional[str] = None,
+                    tool_steps: Optional[list[ModelMessage]] = None) -> None:
+        """
+        记下这一轮：用户的话、调技能的过程、发出去的回复；没回复的（不回、自动触发时没发出去的）只记用户的话
+
+        tool_steps 可以直接给这一轮 pydantic_ai 的全部新消息，只挑出技能调用和结果存
+        """
         self.updated_at = datetime.now()
-        get_session_repo().append_turn(self.session_id, tool_steps_json(tool_steps or []), reply)
+        steps_json = tool_steps_json(tool_steps or []) if reply else None
+        get_session_repo().append_turn(self.session_id, user_text, steps_json, reply)
         self._maybe_compress()
 
     def _maybe_compress(self) -> None:

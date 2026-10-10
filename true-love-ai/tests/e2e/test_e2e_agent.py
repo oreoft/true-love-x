@@ -286,7 +286,8 @@ def test_empty_model_reply_sends_the_skill_result(e2e, chat):
 
 def test_a_model_that_keeps_calling_tools_still_answers(e2e, chat):
     def brain(req: LLMRequest) -> dict:
-        if req.tools:
+        # like a real model: keeps calling until told not to
+        if req.body.get("tool_choice") != "none":
             return calls(call("query_user_memory", {}))
         return text("查了好几遍，就这些")
 

@@ -400,16 +400,33 @@ class RoundLimitTests(AgentTestCase):
         self.add_skill("query_user_memory", returns("什么都没记"))
 
         def keep_calling(seen):
-            return [tool("query_user_memory")] if seen.tools else "查了好几遍，就这些"
+            return "查了好几遍，就这些" if seen.tool_choice == "none" else [tool("query_user_memory")]
 
         with self.assertLogs("AgentLoop", "WARNING") as logs, self.assertLogs("Outcome", "INFO") as outcome_logs:
             script = await self.drive(keep_calling)
 
         self.assertEqual(self.replies, ["查了好几遍，就这些"])
         self.assertEqual(len(script.seen), agent_loop.MAX_TOOL_ITERATIONS + 1)
-        self.assertEqual(script.seen[-1].tools, [])
+        # tools stay defined on the last request (history holds tool calls), the model is just told not to use them
+        self.assertEqual(script.seen[-1].tools, ["query_user_memory"])
+        self.assertEqual([s.tool_choice for s in script.seen[:-1]], [None] * agent_loop.MAX_TOOL_ITERATIONS)
         self.assertIn("上限", "\n".join(logs.output))
         self.assertIn("outcome=replied", outcome_logs.output[-1])
+
+    async def test_a_model_that_ignores_the_limit_runs_no_more_skills_and_what_ran_is_remembered(self):
+        handler = AsyncMock(return_value="提醒设好了")
+        self.add_skill("set_reminder", handler)
+        with self.assertLogs("AgentLoop", "WARNING"), self.assertLogs("Outcome", "WARNING") as logs:
+            script = await self.drive([tool("set_reminder", {"content": "交房租"})])
+
+        self.assertEqual(handler.await_count, agent_loop.MAX_TOOL_ITERATIONS)
+        self.assertIn(tools.ROUNDS_USED_UP, script.seen[-1].tool_results)
+        self.assertEqual(self.replies, [outcome.FALLBACK_TEXT[Outcome.TOO_MANY_ROUNDS]])
+        self.assertIn("outcome=too_many_rounds", logs.output[-1])
+        # the reminders that were set are in the history, so the next turn does not set them again
+        rows = self.history()
+        self.assertEqual([r.type for r in rows], ["msg", TOOLS, "msg"])
+        self.assertEqual(rows[1].content.count("提醒设好了"), agent_loop.MAX_TOOL_ITERATIONS)
 
 
 class ModelFailureTests(AgentTestCase):
@@ -420,6 +437,16 @@ class ModelFailureTests(AgentTestCase):
         self.assertEqual(self.replies, [outcome.FALLBACK_TEXT[Outcome.LLM_ERROR]])
         self.assertEqual(self.history()[-1].content, outcome.FALLBACK_TEXT[Outcome.LLM_ERROR])
         self.assertIn("outcome=llm_error", logs.output[-1])
+
+    async def test_skills_that_ran_before_the_model_failed_are_remembered(self):
+        self.add_skill("set_reminder", returns("提醒设好了"))
+        with self.assertLogs("Outcome", "WARNING"), self.assertLogs("AgentLoop", "ERROR"):
+            await self.drive([tool("set_reminder", {"content": "交房租"})], RuntimeError("down"))
+
+        rows = self.history()
+        self.assertEqual([r.type for r in rows], ["msg", TOOLS, "msg"])
+        self.assertIn("提醒设好了", rows[1].content)
+        self.assertEqual(rows[2].content, outcome.FALLBACK_TEXT[Outcome.LLM_ERROR])
 
     async def test_the_fallback_model_answers_when_the_primary_fails(self):
         primary = Script(ModelHTTPError(503, "e2e/chat", "overloaded"))
