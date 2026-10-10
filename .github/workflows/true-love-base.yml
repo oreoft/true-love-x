@@ -1,21 +1,50 @@
 name: true-love-base Deploy to m8s-win, ser-win and gcp-win
 
+# Pushes to master deploy through true-love-deploy.yml, which runs ai, server and base in order
 on:
   workflow_dispatch:
-  push:
-    branches: [ "master" ]
-    paths:
-      - "true-love-base/**"
-      - ".github/systemd/**"
-      - ".github/workflows/true-love-base.yml"
+    inputs:
+      machines:
+        description: Comma-separated machines to deploy
+        type: string
+        default: m8s,ser,gcp-win
+  workflow_call:
+    inputs:
+      machines:
+        description: Comma-separated machines to deploy
+        type: string
+        default: m8s,ser,gcp-win
 
 permissions:
   contents: read
   id-token: write
 
 jobs:
+  # Picks the requested machines out of the table below
+  targets:
+    runs-on: ubuntu-latest
+    outputs:
+      include: ${{ steps.pick.outputs.include }}
+    steps:
+      - id: pick
+        env:
+          MACHINES: ${{ inputs.machines || 'm8s,ser,gcp-win' }}
+          # ser-win has no public entry; reach it through ser-docker, the one host with a public SSH port
+          ALL: >-
+            [
+              {"machine": "m8s", "host_secret": "M8S_GW_HOST", "key_secret": "M8S_SSH_DOOR_KEY", "user": "admin", "port": 2233},
+              {"machine": "ser", "host_secret": "SER_WIN_HOST", "key_secret": "SER_SSH_DOOR_KEY", "user": "admin", "port": 22,
+               "jump_host_secret": "SER_GW_HOST", "jump_user": "server", "jump_port": 2233},
+              {"machine": "gcp-win", "host_secret": "GCP_WIN_HOST", "key_secret": "GCP_WIN_SSH_KEY", "user": "admin", "port": 22}
+            ]
+        run: |
+          include=$(jq -c --arg m "$MACHINES" '($m | split(",")) as $want | map(select(.machine as $x | $want | index($x)))' <<< "$ALL")
+          [ "$include" != "[]" ] || { echo "::error::no known machine in '$MACHINES'"; exit 1; }
+          echo "include=$include" >> "$GITHUB_OUTPUT"
+
   deploy:
     name: Deploy Base (${{ matrix.machine }})
+    needs: targets
     runs-on: ubuntu-latest
     # One deploy per machine at a time; on m8s this queues behind the server deploy, which shares the checkout
     concurrency:
@@ -27,26 +56,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - machine: m8s
-            host_secret: M8S_GW_HOST
-            key_secret: M8S_SSH_DOOR_KEY
-            user: admin
-            port: 2233
-          # ser-win has no public entry; reach it through ser-docker, the one host with a public SSH port
-          - machine: ser
-            host_secret: SER_WIN_HOST
-            key_secret: SER_SSH_DOOR_KEY
-            user: admin
-            port: 22
-            jump_host_secret: SER_GW_HOST
-            jump_user: server
-            jump_port: 2233
-          - machine: gcp-win
-            host_secret: GCP_WIN_HOST
-            key_secret: GCP_WIN_SSH_KEY
-            user: admin
-            port: 22
+        include: ${{ fromJSON(needs.targets.outputs.include) }}
     env:
       SERVER_IP: ${{ secrets[matrix.host_secret] }}
       SERVER_USER: ${{ matrix.user }}

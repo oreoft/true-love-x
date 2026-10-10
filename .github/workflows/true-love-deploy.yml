@@ -1,0 +1,97 @@
+name: true-love Deploy in order (ai → server → base)
+
+# ai, server and base depend on each other, so deploy them one after another instead of all at once.
+# Only the parts changed by the push are deployed; base goes to ser-win and gcp-win first, m8s last.
+# A failed step stops the steps after it.
+on:
+  push:
+    branches: [ "master" ]
+    paths:
+      - "true-love-ai/**"
+      - "true-love-server/**"
+      - "true-love-base/**"
+      - ".github/systemd/**"
+      - ".github/workflows/true-love-ai.yml"
+      - ".github/workflows/true-love-server.yml"
+      - ".github/workflows/true-love-base.yml"
+
+# Later pushes wait for the running deploy instead of interleaving with it
+concurrency:
+  group: true-love-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      ai: ${{ steps.diff.outputs.ai }}
+      server: ${{ steps.diff.outputs.server }}
+      base: ${{ steps.diff.outputs.base }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: diff
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            # No usable base to diff against: deploy everything
+            echo "ai=true" >> "$GITHUB_OUTPUT"
+            echo "server=true" >> "$GITHUB_OUTPUT"
+            echo "base=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$BEFORE" "$GITHUB_SHA")
+          echo "$files"
+          has() { grep -qE "$1" <<< "$files" && echo true || echo false; }
+          echo "ai=$(has '^(true-love-ai/|\.github/workflows/true-love-ai\.yml$)')" >> "$GITHUB_OUTPUT"
+          echo "server=$(has '^(true-love-server/|\.github/workflows/true-love-server\.yml$)')" >> "$GITHUB_OUTPUT"
+          echo "base=$(has '^(true-love-base/|\.github/systemd/|\.github/workflows/true-love-base\.yml$)')" >> "$GITHUB_OUTPUT"
+
+  ai:
+    name: ai
+    needs: changes
+    if: needs.changes.outputs.ai == 'true'
+    uses: ./.github/workflows/true-love-ai.yml
+    secrets: inherit
+
+  server:
+    name: server
+    needs: [ changes, ai ]
+    if: >-
+      !cancelled() && needs.changes.outputs.server == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.ai.result)
+    uses: ./.github/workflows/true-love-server.yml
+    secrets: inherit
+
+  base:
+    name: base (ser-win, gcp-win)
+    needs: [ changes, ai, server ]
+    if: >-
+      !cancelled() && needs.changes.outputs.base == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.ai.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.server.result)
+    uses: ./.github/workflows/true-love-base.yml
+    with:
+      machines: ser,gcp-win
+    secrets: inherit
+
+  # m8s runs the main WeChat account, so it goes last
+  base-m8s:
+    name: base (m8s)
+    needs: [ changes, base ]
+    if: >-
+      !cancelled() && needs.changes.outputs.base == 'true' &&
+      needs.base.result == 'success'
+    uses: ./.github/workflows/true-love-base.yml
+    with:
+      machines: m8s
+    secrets: inherit

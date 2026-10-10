@@ -1,12 +1,9 @@
 name: true-love-ai Build & Deploy via Docker
 
+# Pushes to master deploy through true-love-deploy.yml, which runs ai, server and base in order
 on:
   workflow_dispatch:
-  push:
-    branches: [ "master" ]
-    paths:
-      - "true-love-ai/**"
-      - ".github/workflows/true-love-ai.yml"
+  workflow_call:
 
 env:
   # ========== Docker 镜像配置 ==========
