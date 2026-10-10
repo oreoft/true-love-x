@@ -73,7 +73,7 @@ async def send_text(request: dict[str, Any] | None = Body(default=None)) -> dict
         - sendReceiver: 接收者
         - is_master: 为 true 时发给这个号的管理员，忽略 sendReceiver（可选）
         - content: 消息内容
-        - atReceiver: 要@的人（可选）
+        - atReceiver: 要@的人，一个人是字符串，几个人是列表（可选）
         - replyMsgId: 这条是在回复哪条群消息（可选）；按群回复方式设置 @、拍一拍或引用对方，做不到时 @
 
     超过 2000 个字符时自动分批：在每批末尾 200 字符内寻找换行符切割，

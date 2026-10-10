@@ -287,6 +287,19 @@ class Robot:
                     self.LOG.warning("Ignoring group reply styles %r", value)
         return self.settings()
 
+    def read_chat(self, chat_name: str, history: int = 0) -> dict:
+        """
+        后台聊天页读一个会话的消息
+
+        在主窗口里打开会话会把红点点掉；私聊轮询开着时，被点掉的私聊消息照常交给 server，免得漏收
+        """
+        result, missed = self.client.chat_messages(chat_name, history)
+        if missed and self.private_poller.enabled:
+            self.LOG.info("Admin opened [%s] with %d unread messages; handing them over", chat_name, len(missed))
+            for message in missed:
+                self.on_message(message, chat_name)
+        return result
+
     def _announce_new_friends(self, requests: list[str]) -> None:
         """自动通过了好友申请后告诉管理员"""
         if not self.master:
@@ -323,7 +336,7 @@ class Robot:
 
     # ==================== 消息发送 ====================
 
-    def send_text_msg(self, msg: str, receiver: str, at_user: Optional[str] = None,
+    def send_text_msg(self, msg: str, receiver: str, at_user: Optional[str | list[str]] = None,
                       reply_msg_id: str = "") -> bool:
         """
         发送文本消息
@@ -331,7 +344,7 @@ class Robot:
         Args:
             msg: 消息内容
             receiver: 接收者
-            at_user: 要@的用户（可选）
+            at_user: 要@的用户，可以是一个人或几个人（可选）
             reply_msg_id: 这条是在回复哪条群消息（可选）；按群回复方式设置 @、拍一拍或引用对方
             
         Returns:
@@ -340,7 +353,7 @@ class Robot:
         if not msg or not msg.strip():
             return False
 
-        at_list = [at_user] if at_user else None
+        at_list = (list(at_user) if isinstance(at_user, list) else [at_user]) if at_user else None
         self.LOG.info("Sending to [%s]: %s...", receiver, msg[:50])
         if not reply_msg_id:
             return self.client.send_text(receiver, msg, at_list)

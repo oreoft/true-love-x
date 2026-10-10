@@ -22,7 +22,7 @@ from wxautox4.utils.lock import ui_transaction
 
 from true_love_common.chat_msg import ChatMsg
 from true_love_base.models.message_converter import convert_message
-from true_love_base.utils.path_resolver import get_wx_imgs_dir
+from true_love_base.utils.path_resolver import get_wx_imgs_dir, to_server_path
 
 LOG = logging.getLogger("WxAutoClient")
 
@@ -70,6 +70,85 @@ def _init_uia_in_thread() -> None:
         _uia_thread.ready = True
 
 
+# 后台聊天页读过的消息留几个会话的
+READ_KEEP_CHATS = 5
+# 改备注的弹窗；EditFriendInfo 出错时会留在屏幕上，挡住之后的界面操作
+_EDIT_FRIEND_WINDOW = "设置备注和标签"
+_ADD_FRIEND_WINDOW = "添加朋友"
+# 搜到的人已经是好友时 AddNewFriend 报这个（ser 实测）
+_NO_ADD_BUTTON = "未找到添加按钮"
+# EditFriendInfo 要先点开聊天信息侧栏；侧栏上次没关好时它点不开，报这个，切到别的会话再切回来就好了（ser 实测）
+_EDIT_PANEL_STUCK = "无法打开编辑用户信息窗口"
+_EDIT_UNCHANGED = "未进行任何修改"
+# 切走用的会话，每个号都有
+_ALWAYS_THERE = "文件传输助手"
+# 消息的 attr 在后台聊天页里怎么显示：自己发的在右边，别人发的在左边，其他的（系统提示、拍一拍）居中
+_MESSAGE_KINDS = {"self": "self", "friend": "friend"}
+
+
+def _reason(result, default: str = "no message") -> str:
+    """WxResponse 里的说明"""
+    if isinstance(result, dict):
+        return str(result.get("message") or default)
+    return str(result) if result is not None else default
+
+
+def _message_list(result) -> list:
+    """GetAllMessage 读失败时不抛异常，返回一个"失败"的 WxResponse（是 dict 不是 list）"""
+    if not isinstance(result, list):
+        raise RuntimeError(f"读消息失败: {_reason(result)}")
+    return result
+
+
+def _unread_tail(raw_msgs: list, unread: int) -> list:
+    """最后 unread 条别人发的消息，就是打开会话前的未读"""
+    from_others = [raw for raw in raw_msgs if str(getattr(raw, "attr", "")).lower() == "friend"]
+    return from_others[-unread:]
+
+
+def _message_view(raw) -> dict:
+    """后台聊天页显示一条消息要的字段"""
+    attr = str(getattr(raw, "attr", "") or "").lower()
+    kind = _MESSAGE_KINDS.get(attr, "system")
+    # 时间分隔是 attr=system、type=time 的消息
+    if str(getattr(raw, "type", "")) == "time":
+        kind = "time"
+    view = {
+        "id": str(getattr(raw, "id", "") or ""),
+        "kind": kind,
+        "type": str(getattr(raw, "type", "") or ""),
+        "sender": str(getattr(raw, "sender", "") or ""),
+        "content": str(getattr(raw, "content", "") or ""),
+    }
+    if view["type"] == "quote":
+        view["quote"] = {"sender": str(getattr(raw, "quote_nickname", "") or ""),
+                         "content": str(getattr(raw, "quote_content", "") or "")}
+    return view
+
+
+def _close_tool_windows(title: str) -> None:
+    """关掉标题是 title 的微信弹窗（Qt 的 ToolSaveBits 窗口），没有就算了"""
+    _close_windows(title, tool_only=True)
+
+
+def _close_windows(title: str, tool_only: bool = False) -> None:
+    """关掉标题是 title 的微信窗口，没有就算了"""
+    import win32con
+    import win32gui
+
+    def close(hwnd, _):
+        if (win32gui.IsWindowVisible(hwnd) and win32gui.GetClassName(hwnd).startswith("Qt")
+                and (not tool_only or win32gui.GetClassName(hwnd).endswith("ToolSaveBits"))
+                and win32gui.GetWindowText(hwnd) == title):
+            LOG.warning("Closing the leftover [%s] window", title)
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+
+    try:
+        win32gui.EnumWindows(close, None)
+    except Exception:
+        LOG.warning("Failed to close the [%s] window", title, exc_info=True)
+
+
 def _window_titled(hwnd: int, title: str) -> bool:
     """这个窗口还在，标题也还是 title"""
     import win32gui
@@ -110,6 +189,11 @@ class WxAutoClient():
         self._replyable_lock = Lock()
         # 每个监听注册时弹出的聊天窗口句柄：{聊天对象: HWND}，查监听状态时只看这个窗口还在不在
         self._listen_windows: dict[str, int] = {}
+        # 后台聊天页读到的消息：{聊天对象: {消息 id: SDK 消息对象}}，拍一拍和引用要用；最近读过的在后面
+        self._read_msgs: OrderedDict[str, dict[str, object]] = OrderedDict()
+        self._read_lock = Lock()
+        # 后台下载一次只下一个：ser 上同时点两个，文件消息拿到的是另一张图片的路径
+        self._download_lock = Lock()
 
     def connect(self) -> bool:
         """连接已登录的微信主窗口；微信没开或没登录时返回 False，由调用方稍后重试"""
@@ -715,6 +799,244 @@ class WxAutoClient():
         if accepted:
             LOG.info("Accepted %d friend requests: %s", len(accepted), accepted)
         return accepted
+
+    # ==================== 后台聊天页 ====================
+
+    def sessions(self) -> list[dict]:
+        """
+        主窗口的会话列表，和微信里的顺序一样
+
+        Returns:
+            [{"name", "time", "content": 最后一条消息, "new_count": 未读数, "ismute", "listening": 有没有开子窗口监听}]
+        """
+        _init_uia_in_thread()
+        with ui_transaction():
+            self.wx.SwitchToChat()
+            items = list(self.wx.GetSession() or [])
+            return [{
+                "name": str(item.name),
+                "time": str(getattr(item, "time", "") or ""),
+                "content": str(getattr(item, "content", "") or ""),
+                "new_count": int(getattr(item, "new_count", 0) or 0),
+                "ismute": bool(getattr(item, "ismute", False)),
+                "listening": item.name in self._listen_windows,
+            } for item in items]
+
+    def chat_messages(self, chat_name: str, history: int = 0) -> tuple[dict, list[ChatMsg]]:
+        """
+        读一个会话里现在能看到的消息，后台拿去显示；读到的消息对象留着，拍一拍和引用要用
+
+        开了子窗口监听的会话直接读子窗口，不动主窗口；其他会话在主窗口里打开再读。
+        主窗口里打开会把红点点掉，私聊轮询就收不到这些未读了，所以把未读的私聊消息一并转换好交给调用方。
+        ser 实测：子窗口只显示最近几条，主窗口读一次 1~4 秒；往上翻 15 条要 9~12 秒。
+
+        Args:
+            history: 往上多翻这么多条更早的消息（只能在主窗口里翻）。GetHistoryMessage 返回的是
+                翻出来的加上原来能看到的、一直到最新一条，翻完会滚回最新。翻上去的那些消息对象已经失效、
+                id 每次翻都不一样（ser 实测），拍一拍、引用、下载都做不了，只有翻完后窗口里还能看到的那些可以
+
+        Returns:
+            ({"chat_name", "chat_type", "member_count", "messages": [...]}, 被点掉红点的私聊消息)
+        """
+        _init_uia_in_thread()
+        with ui_transaction():
+            chat, unread = self._open_chat(chat_name, main_window=history > 0)
+            raw_msgs = _message_list(self.wx.GetHistoryMessage(history)) if history else None
+            # 翻完以后窗口里能看到的才是活的消息对象
+            visible = _message_list(chat.GetAllMessage())
+            raw_msgs = raw_msgs if history else visible
+            info = chat.ChatInfo() or {}
+        self._remember_read(chat_name, visible)
+        live = {str(getattr(raw, "id", "")) for raw in visible}
+        result = {
+            "chat_name": chat_name,
+            "chat_type": str(info.get("chat_type", "") or ""),
+            "member_count": info.get("group_member_count"),
+            "messages": [{**_message_view(raw), "actionable": str(getattr(raw, "id", "")) in live}
+                         for raw in raw_msgs],
+        }
+        missed = []
+        if unread and result["chat_type"] == "friend":
+            missed = self._polled_messages(chat_name, "friend", _unread_tail(raw_msgs, unread))
+        return result, missed
+
+    def _open_chat(self, chat_name: str, main_window: bool = False):
+        """
+        要读的那个聊天窗口：开了子窗口的用子窗口，否则在主窗口里打开
+
+        Returns:
+            (聊天窗口, 打开前这个会话的未读数；用子窗口时没有未读)
+        """
+        window = None if main_window else self.wx.GetSubWindow(chat_name)
+        if window is not None:
+            return window, 0
+        self.wx.SwitchToChat()
+        session = self._session(chat_name)
+        unread = int(getattr(session, "new_count", 0) or 0)
+        result = self.wx.ChatWith(chat_name)
+        if result is not None and not result:
+            raise RuntimeError(f"打开会话 [{chat_name}] 失败: {_reason(result)}")
+        return self.wx, unread
+
+    def _remember_read(self, chat_name: str, raw_msgs: list) -> None:
+        """后台读到的消息按 id 留着，只留最近读过的几个会话"""
+        with self._read_lock:
+            self._read_msgs.pop(chat_name, None)
+            self._read_msgs[chat_name] = {str(getattr(raw, "id", "") or ""): raw for raw in raw_msgs}
+            while len(self._read_msgs) > READ_KEEP_CHATS:
+                self._read_msgs.pop(next(iter(self._read_msgs)))
+
+    def _read_message(self, chat_name: str, msg_id: str):
+        """
+        后台读到过的一条消息，还在聊天窗口里时返回它
+
+        窗口切走了或者被新消息顶掉时，重新打开会话读一遍，按 id 再找一次；找不到抛 LookupError
+        """
+        with self._read_lock:
+            raw = self._read_msgs.get(chat_name, {}).get(msg_id)
+        try:
+            if raw is not None and raw.exists():
+                return raw
+        except Exception:
+            LOG.warning("[%s] checking message %s failed; reading the chat again", chat_name, msg_id, exc_info=True)
+        chat, _ = self._open_chat(chat_name)
+        raw_msgs = _message_list(chat.GetAllMessage())
+        self._remember_read(chat_name, raw_msgs)
+        raw = next((m for m in raw_msgs if str(getattr(m, "id", "")) == msg_id), None)
+        if raw is None:
+            raise LookupError("这条消息已经不在聊天窗口里了，刷新一下再试")
+        return raw
+
+    def quote_message(self, chat_name: str, msg_id: str, content: str) -> None:
+        """引用一条后台读到过的消息回复。Raises: LookupError、RuntimeError"""
+        _init_uia_in_thread()
+        with ui_transaction():
+            raw = self._read_message(chat_name, msg_id)
+            result = raw.quote(content)
+        if not result:
+            raise RuntimeError(f"引用失败: {_reason(result)}")
+        LOG.info("[Admin] [%s] quoted message %s", chat_name, msg_id)
+
+    def tickle_message(self, chat_name: str, msg_id: str) -> None:
+        """拍一拍一条后台读到过的消息的发送人。Raises: LookupError"""
+        _init_uia_in_thread()
+        with ui_transaction():
+            raw = self._read_message(chat_name, msg_id)
+            # SDK 不返回结果，没报错就算拍到了
+            raw.tickle()
+            # 等“拍了拍”的提示出来，后台接着重读消息时就能看到
+            time.sleep(TICKLE_SETTLE_SECONDS)
+        LOG.info("[Admin] [%s] tickled the sender of message %s", chat_name, msg_id)
+
+    def download_message(self, chat_name: str, msg_id: str, quoted: bool = False) -> str:
+        """
+        下载一条后台读到过的图片、视频或文件消息（quoted 时下载它引用的那张图片或视频），存到 wx_imgs
+
+        后台点了才下载：每次都要在微信里点开，占用界面。
+        Returns:
+            相对 base 工作目录的路径，通过 /media 开放。Raises: LookupError、RuntimeError
+        """
+        _init_uia_in_thread()
+        with self._download_lock, ui_transaction():
+            raw = self._read_message(chat_name, msg_id)
+            action = getattr(raw, "download_quote_image" if quoted else "download", None)
+            if action is None:
+                raise LookupError("这条消息没有可以下载的内容")
+            result = action()
+        if not result:
+            raise RuntimeError(f"下载失败: {_reason(result)}")
+        path = to_server_path(str(result))
+        LOG.info("[Admin] [%s] downloaded message %s%s: %s", chat_name, msg_id, " (quoted)" if quoted else "", path)
+        return path
+
+    # ==================== 后台好友页 ====================
+    # 标签不做：ser 上 41.2.1 的 EditFriendInfo(add_tags=...) 在两个好友身上都报 Find Control Timeout（找不到标签控件），
+    # 还会把「设置备注和标签」窗口留在屏幕上
+
+    def friend_requests(self) -> list[dict]:
+        """
+        通讯录「新的朋友」里的申请，只读，最后切回聊天页
+
+        Returns:
+            [{"content": 申请条目上的文字（含昵称和验证消息）, "acceptable": 还能不能通过}]
+        """
+        _init_uia_in_thread()
+        with ui_transaction():
+            try:
+                return [{"content": str(getattr(item, "content", "") or ""),
+                         "acceptable": bool(getattr(item, "acceptable", False))}
+                        for item in self.wx.GetNewFriends(acceptable=False) or []]
+            finally:
+                self.wx.SwitchToChat()
+
+    def accept_friend(self, content: str, remark: str = "") -> None:
+        """
+        通过申请条目文字是 content 的那条好友申请，最后切回聊天页
+
+        Raises: LookupError 找不到这条待通过的申请；RuntimeError 通过失败
+        """
+        _init_uia_in_thread()
+        with ui_transaction():
+            try:
+                request = next((item for item in self.wx.GetNewFriends(acceptable=True) or []
+                                if str(getattr(item, "content", "")) == content), None)
+                if request is None:
+                    raise LookupError("没找到这条待通过的好友申请，可能已经处理过了")
+                result = request.accept(remark=remark or None)
+            finally:
+                self.wx.SwitchToChat()
+        if not result:
+            raise RuntimeError(f"通过失败: {_reason(result)}")
+        LOG.info("[Admin] accepted friend request [%s]", content)
+
+    def add_friend(self, keywords: str, addmsg: str = "", remark: str = "") -> str:
+        """
+        搜索微信号或手机号发好友申请，最后切回聊天页
+
+        Returns:
+            SDK 给的结果说明。Raises: RuntimeError 发送失败
+        """
+        _init_uia_in_thread()
+        with ui_transaction():
+            try:
+                result = self.wx.AddNewFriend(keywords, addmsg=addmsg or None, remark=remark or None)
+            finally:
+                # 搜到的人已经是好友时没有"添加"按钮，SDK 报失败并把「添加朋友」窗口留在屏幕上
+                _close_windows(_ADD_FRIEND_WINDOW)
+                self.wx.SwitchToChat()
+        if not result:
+            reason = _reason(result)
+            if reason == _NO_ADD_BUTTON:
+                reason = "搜索结果里没有「添加到通讯录」，可能已经是好友，或者搜不到这个号"
+            raise RuntimeError(f"加好友失败: {reason}")
+        LOG.info("[Admin] sent a friend request to [%s]", keywords)
+        return _reason(result, "")
+
+    def edit_friend(self, chat_name: str, remark: str) -> None:
+        """
+        改好友的备注，在主窗口里打开会话改
+
+        改备注会让会话名跟着变，监听着的好友改了备注，监听就对不上了，所以不让改，先移除监听。
+        Raises: ValueError 监听中的好友；RuntimeError 修改失败
+        """
+        if chat_name in self._listen_windows:
+            raise ValueError("这个好友在监听列表里，改备注会让监听失效；先在监听管理里移除再改")
+        _init_uia_in_thread()
+        with ui_transaction():
+            chat, _ = self._open_chat(chat_name, main_window=True)
+            try:
+                result = chat.EditFriendInfo(remark=remark)
+                if not result and _reason(result) == _EDIT_PANEL_STUCK:
+                    LOG.warning("[Admin] the chat info panel of [%s] is stuck; reopening the chat", chat_name)
+                    self.wx.ChatWith(_ALWAYS_THERE)
+                    self.wx.ChatWith(chat_name)
+                    result = chat.EditFriendInfo(remark=remark)
+            finally:
+                _close_tool_windows(_EDIT_FRIEND_WINDOW)
+        # 新备注和原来一样时 SDK 报"未进行任何修改"，备注本来就是想要的样子
+        if not result and _reason(result) != _EDIT_UNCHANGED:
+            raise RuntimeError(f"修改失败: {_reason(result)}")
+        LOG.info("[Admin] changed the remark of [%s] to [%s]", chat_name, remark)
 
     def _wait_muted(self, name: str, seconds: float = 3.0) -> bool:
         """设完免打扰后会话列表要过一会儿才显示出来，等它变过来"""
