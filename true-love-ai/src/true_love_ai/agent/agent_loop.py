@@ -7,18 +7,19 @@ Agent Loop
 流程：
     收到 msg
       → 消息转成文字（链接、图片、文件、语音、引用）
-      → 记下用户说的话，取出之前的历史（含之前调技能的过程）和摘要
+      → 取出之前的历史（含之前调技能的过程）和摘要
       → instructions（人设、规则、摘要）+ 历史 + 最新消息（时间、发送者画像、这次的话）交给 pydantic_ai
-      → 模型调技能就执行（见 agent.tools），直到它给出文字回答；技能轮次到上限后不再给工具，逼它直接回答
-      → finish：按结局决定发不发、发什么，通过 Server /action/send 发送，发出去的回复连同技能过程记进历史
+      → 模型调技能就执行（见 agent.tools），直到它给出文字回答；技能轮次到上限后让它别再调（tool_choice=none），直接回答
+      → finish：按结局决定发不发、发什么，通过 Server /action/send 发送；这一轮（用户的话、技能过程、发出去的回复）一起记进历史
 """
 
 import logging
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
-from pydantic_ai import Agent, RunContext
+from pydantic_ai import Agent, RunContext, capture_run_messages
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ToolReturnPart
 from pydantic_ai.settings import ModelSettings
@@ -27,7 +28,7 @@ from true_love_common.chat_msg import ChatMsg
 
 from true_love_ai.agent import link_reader, outcome, prompt, server_client
 from true_love_ai.agent.outcome import Ending, Outcome
-from true_love_ai.agent.tools import TOOL_ARG_RETRIES, AgentDeps, SkillToolset, has_any_skill
+from true_love_ai.agent.tools import TOOL_ARG_RETRIES, AgentDeps, SkillToolset
 from true_love_ai.core.session import Session, get_session_manager, without_tool_steps
 from true_love_ai.llm.router import get_llm_router
 from true_love_ai.memory import persona_service
@@ -35,7 +36,7 @@ from true_love_ai.memory.memory_manager import get_user_context
 
 LOG = logging.getLogger("AgentLoop")
 
-# 一条消息里最多调几轮技能（每轮可以并行调多个）；到了上限不再给工具，模型拿已有结果直接回答
+# 一条消息里最多调几轮技能（每轮可以并行调多个）；到了上限让模型别再调，拿已有结果直接回答
 MAX_TOOL_ITERATIONS = 6
 # 模型请求次数的硬上限：技能轮次 + 最后回答 + 参数出错重来的余量，超了按 too_many_rounds 收尾
 MAX_MODEL_REQUESTS = MAX_TOOL_ITERATIONS + 4
@@ -108,7 +109,11 @@ def _tool_rounds(messages: list[ModelMessage]) -> int:
 
 @dataclass
 class Turn:
-    """一次思考的结果：结局、会话和这次用户的话（没开始就失败时为空）、这轮调技能的过程"""
+    """
+    一条消息处理到哪了：结局、会话和这次用户的话（读懂消息、找到会话之后才有）、这轮 pydantic_ai 的新消息
+
+    _think 边走边填，中途出错时 finish 也能把已经知道的记下来
+    """
     ending: Ending
     session: Optional[Session] = None
     user_text: str = ""
@@ -137,27 +142,29 @@ class AgentLoop:
                  msg.bot_id, msg.platform, msg.sender_id, msg.sender_name or msg.sender_id, session_id,
                  msg.msg_type, auto)
 
-        turn = await self._think(msg, session_id, session_chat, auto)
+        turn = Turn(Ending(Outcome.CRASHED))
+        try:
+            await self._think(msg, session_id, session_chat, auto, turn)
+        except Exception as e:
+            LOG.exception("处理消息时出错: %s", e)
+            turn.ending = Ending(Outcome.CRASHED, detail=repr(e)[:200])
         await self.finish(msg, turn.ending, turn)
 
-    async def _think(self, msg: ChatMsg, session_id: str, session_chat: str, auto: bool) -> Turn:
-        """跑一遍 LLM + 技能循环，得出结局；不发回复，发不发、发什么由 finish 统一决定"""
+    async def _think(self, msg: ChatMsg, session_id: str, session_chat: str, auto: bool, turn: Turn) -> None:
+        """跑一遍 LLM + 技能循环，把结局填进 turn；不发回复，发不发、发什么由 finish 统一决定"""
         content = await self._build_user_content(msg)
         if not content:
-            return Turn(Ending(Outcome.UNREADABLE))
+            turn.ending = Ending(Outcome.UNREADABLE)
+            return
 
         sender_name = msg.sender_name or msg.sender_id
+        turn.session = self.session_manager.get_or_create(session_id)
+        turn.user_text = prompt.stored_text(content, sender_name, msg.is_group)
         user_ctx = get_user_context(session_id, msg.sender_id)
-        session = self.session_manager.get_or_create(session_id)
-        text = prompt.stored_text(content, sender_name, msg.is_group)
-        summary, history = session.history()
+        summary, history = turn.session.history()
 
         receiver, at_user, _ = _route(msg)
         chat = msg.chat_id if msg.is_group else ""
-        access = {"platform": msg.platform, "bot_id": msg.bot_id, "sender_id": msg.sender_id,
-                  "is_group": msg.is_group, "chat": chat}
-        if not has_any_skill(access):
-            history = without_tool_steps(history)
         # 人设按"这个机器人里的这个群或人"选，名字用 base 带来的昵称；每次现查，tl-admin 改了下一条就生效
         persona = persona_service.resolve(msg.bot_id, session_chat, msg.bot_name).prompt
         deps = AgentDeps(
@@ -169,41 +176,52 @@ class AgentLoop:
                 "chat": chat,
             },
             # 权限点按平台、号、群、人匹配
-            access=access,
+            access={"platform": msg.platform, "bot_id": msg.bot_id, "sender_id": msg.sender_id,
+                    "is_group": msg.is_group, "chat": chat},
             instructions=prompt.instructions(persona, summary),
             # 没人叫它、自动接话时不发技能的"正在…"提示，免得群里一张图刷两条
             notify=not auto,
             max_tool_rounds=MAX_TOOL_ITERATIONS,
         )
-        try:
-            result = await self.agent.run(
-                prompt.live_prompt(text, sender_name=sender_name, user_ctx=user_ctx, auto=auto),
-                message_history=history,
-                deps=deps,
-                model=self.llm_router.agent_model(),
-                model_settings=_model_settings,
-                toolsets=[self.toolset],
-                usage_limits=UsageLimits(request_limit=MAX_MODEL_REQUESTS),
-            )
-        except UsageLimitExceeded as e:
-            LOG.warning("AgentLoop 超过最大请求次数 (%d): %s", MAX_MODEL_REQUESTS, e)
-            # 已经执行过的技能照样记进历史，免得下一轮又办一遍
-            return Turn(Ending(Outcome.TOO_MANY_ROUNDS, detail=str(e)[:200]), session, text, deps.executed_steps())
-        except Exception as e:
-            LOG.exception("LLM 调用失败: %s", e)
-            return Turn(Ending(Outcome.LLM_ERROR, detail=repr(e)[:200]), session, text, deps.executed_steps())
+        if not deps.allowed_skills():
+            history = without_tool_steps(history)
 
-        steps = result.new_messages()
-        if _tool_rounds(steps) >= MAX_TOOL_ITERATIONS:
+        # 出错时也要拿到这轮已经发生的事（比如已经设好的提醒），按 run_id 从捕获的消息里挑出这一轮的
+        run_id = uuid.uuid4().hex
+        with capture_run_messages() as captured:
+            try:
+                result = await self.agent.run(
+                    prompt.live_prompt(turn.user_text, sender_name=sender_name, user_ctx=user_ctx, auto=auto),
+                    message_history=history,
+                    deps=deps,
+                    model=self.llm_router.agent_model(),
+                    model_settings=_model_settings,
+                    toolsets=[self.toolset],
+                    usage_limits=UsageLimits(request_limit=MAX_MODEL_REQUESTS),
+                    run_id=run_id,
+                )
+            except UsageLimitExceeded as e:
+                LOG.warning("AgentLoop 超过最大请求次数 (%d): %s", MAX_MODEL_REQUESTS, e)
+                turn.ending = Ending(Outcome.TOO_MANY_ROUNDS, detail=str(e)[:200])
+                turn.steps = [m for m in captured if m.run_id == run_id]
+                return
+            except Exception as e:
+                LOG.exception("LLM 调用失败: %s", e)
+                turn.ending = Ending(Outcome.LLM_ERROR, detail=repr(e)[:200])
+                turn.steps = [m for m in captured if m.run_id == run_id]
+                return
+
+        turn.steps = result.new_messages()
+        if _tool_rounds(turn.steps) >= MAX_TOOL_ITERATIONS:
             LOG.warning("技能调用到了 %d 轮上限，模型按已有结果直接回答", MAX_TOOL_ITERATIONS)
-        ending = outcome.from_model_reply(result.output, _last_tool_result(steps), auto, deps.unrecovered_failures())
-        return Turn(ending, session, text, steps)
+        turn.ending = outcome.from_model_reply(result.output, _last_tool_result(turn.steps), auto,
+                                               deps.unrecovered_failures())
 
     async def finish(self, msg: ChatMsg, ending: Ending, turn: Optional[Turn] = None) -> None:
         """
         一条消息的唯一收口：按结局决定发不发、发什么，打一行"回复结局"日志
 
-        这一轮记进会话历史：发出去的话连同调技能的过程；没发的（不回、自动触发时的各种兜底）只记用户说的话。
+        这一轮记进会话历史：用户说的话、调技能的过程，发出去了的话再加上回复（不回、自动触发时的各种兜底不记回复）。
         """
         auto = is_auto_triggered(msg)
         text = outcome.text_to_send(ending, auto)

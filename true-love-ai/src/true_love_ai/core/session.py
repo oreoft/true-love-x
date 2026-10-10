@@ -154,12 +154,14 @@ class Session:
     def record_turn(self, user_text: str, reply: Optional[str] = None,
                     tool_steps: Optional[list[ModelMessage]] = None) -> None:
         """
-        记下这一轮：用户的话、调技能的过程、发出去的回复；没回复的（不回、自动触发时没发出去的）只记用户的话
+        记下这一轮：用户的话、调技能的过程、发出去的回复（没发的不记）
 
-        tool_steps 可以直接给这一轮 pydantic_ai 的全部新消息，只挑出技能调用和结果存
+        没发回复也记技能过程：技能可能已经办了事（比如设了提醒），下一轮模型得知道；
+        自动触发时看过的图、读过的文件，之后有人问起来也用得上。
+        tool_steps 可以直接给这一轮 pydantic_ai 的全部新消息，只挑出完整的技能调用和结果存
         """
         self.updated_at = datetime.now()
-        steps_json = tool_steps_json(tool_steps or []) if reply else None
+        steps_json = tool_steps_json(tool_steps or [])
         get_session_repo().append_turn(self.session_id, user_text, steps_json, reply)
         self._maybe_compress()
 

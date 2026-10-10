@@ -150,11 +150,18 @@ class HistoryTests(AgentTestCase):
         self.assertNotIn(prompt.FORMAT_RULE[:10], stored)
         self.assertNotIn('"instructions": "', stored.replace('\\"', '"'))
 
-    async def test_a_turn_that_was_not_answered_keeps_only_what_the_user_said(self):
+    async def test_a_turn_that_was_not_answered_keeps_what_was_said_and_seen_but_no_reply(self):
         self.add_skill("analyze_image", returns("一个人在健身"))
-        await self.drive([tool("analyze_image")], outcome.SKIP_MARKER, is_at_me=False)
+        script = Script([tool("analyze_image")], outcome.SKIP_MARKER, "那是一张健身照")
+        loop = self.loop(script)
+        await loop.run(message(is_at_me=False))
+        await loop.run(message(content="刚才那张图是啥", msg_id="m2"))
 
-        self.assertEqual([(r.type, r.role, r.content) for r in self.history()], [("msg", "user", "Alice：hi")])
+        rows = self.history()
+        self.assertEqual([(r.type, r.role) for r in rows[:2]], [("msg", "user"), (TOOLS, None)])
+        self.assertNotIn(outcome.SKIP_MARKER, json.dumps([r.content for r in rows], ensure_ascii=False))
+        self.assertIn("一个人在健身", script.seen[-1].text())
+        self.assertEqual(self.replies, ["那是一张健身照"])
 
 
     async def test_after_a_skipped_auto_turn_the_next_mention_still_sees_it(self):
@@ -447,6 +454,24 @@ class ModelFailureTests(AgentTestCase):
         self.assertEqual([r.type for r in rows], ["msg", TOOLS, "msg"])
         self.assertIn("提醒设好了", rows[1].content)
         self.assertEqual(rows[2].content, outcome.FALLBACK_TEXT[Outcome.LLM_ERROR])
+
+    async def test_an_auto_turn_whose_model_failed_after_a_skill_ran_still_remembers_the_skill(self):
+        self.add_skill("set_reminder", returns("提醒设好了"))
+        with self.assertLogs("Outcome", "WARNING"), self.assertLogs("AgentLoop", "ERROR"):
+            await self.drive([tool("set_reminder", {"content": "交房租"})], RuntimeError("down"), is_at_me=False)
+
+        self.assertEqual(self.sent, [])
+        self.assertEqual([r.type for r in self.history()], ["msg", TOOLS])
+
+    async def test_a_crash_while_thinking_still_answers_and_keeps_the_message(self):
+        with patch.object(agent_loop, "get_user_context", side_effect=RuntimeError("db gone")), \
+                self.assertLogs("Outcome", "WARNING") as logs, self.assertLogs("AgentLoop", "ERROR"):
+            await self.drive("不该走到这")
+
+        self.assertEqual(self.replies, [outcome.FALLBACK_TEXT[Outcome.CRASHED]])
+        self.assertIn("outcome=crashed", logs.output[-1])
+        self.assertEqual([(r.role, r.content) for r in self.history()],
+                         [("user", "Alice：hi"), ("assistant", outcome.FALLBACK_TEXT[Outcome.CRASHED])])
 
     async def test_the_fallback_model_answers_when_the_primary_fails(self):
         primary = Script(ModelHTTPError(503, "e2e/chat", "overloaded"))

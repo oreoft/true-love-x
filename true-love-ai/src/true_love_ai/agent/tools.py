@@ -5,7 +5,7 @@
 技能还是原来的写法（OpenAI function schema + async handler(params, ctx)），SkillToolset 只做适配：
 - 每一步按权限点现筛：没权限的技能模型看不到（执行时 skill_registry 再查一遍）
 - skill_run 的说明里列出当前这个人能用的动态技能
-- 执行前发预通知、按技能声明的超时执行、失败转成回给模型的话，并记下每次调用（见 SkillCall）
+- 执行前发预通知、按技能声明的超时执行、失败转成回给模型的话，并记下哪些技能失败了
 - 参数必须是 JSON 对象，不是的话 pydantic_ai 把错误回给模型让它重新调，技能不会拿着空参数执行
 - 技能轮次到了上限：AgentLoop 让模型别再调（tool_choice=none），模型硬要调的也不执行，只回它一句"直接回答"
 """
@@ -18,13 +18,6 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from pydantic_ai import RunContext
-from pydantic_ai.messages import (
-    ModelMessage,
-    ModelRequest,
-    ModelResponse,
-    ToolCallPart,
-    ToolReturnPart,
-)
 from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.toolsets import AbstractToolset, ToolsetTool
 from pydantic_core import SchemaValidator, core_schema
@@ -47,16 +40,6 @@ _ARGS_VALIDATOR = SchemaValidator(core_schema.dict_schema(keys_schema=core_schem
 
 
 @dataclass
-class SkillCall:
-    """执行过的一次技能调用"""
-    name: str
-    args: dict
-    call_id: str
-    result: str
-    failed: bool
-
-
-@dataclass
 class AgentDeps:
     """一条消息的处理过程中，技能要用到的上下文"""
     # 交给技能的 ctx（session_id、sender_id、sender_name、is_group、receiver、at_user、platform、bot_id、chat）
@@ -69,13 +52,19 @@ class AgentDeps:
     notify: bool = True
     # 前几步可以调技能，之后不再执行
     max_tool_rounds: int = 6
-    # 执行过的技能调用，按完成顺序
-    calls: list[SkillCall] = field(default_factory=list)
-    # 这条消息里能用的动态技能说明，第一次用到时查一次库
+    # 执行过的技能和是否失败，按完成顺序
+    calls: list[tuple[str, bool]] = field(default_factory=list)
+    # 这条消息里能用的内置技能、动态技能说明，第一次用到时算一次
+    _allowed: Optional[frozenset[str]] = None
     _dynamic_hints: Optional[str] = None
 
     def rounds_used_up(self, run_step: int) -> bool:
         return run_step > self.max_tool_rounds
+
+    def allowed_skills(self) -> frozenset[str]:
+        if self._allowed is None:
+            self._allowed = frozenset(n for n in skill_registry.names() if check_permission(n, self.access))
+        return self._allowed
 
     def dynamic_hints(self) -> str:
         if self._dynamic_hints is None:
@@ -85,22 +74,10 @@ class AgentDeps:
     def unrecovered_failures(self) -> list[str]:
         """失败了、之后也没再成功过的技能；模型重试成功了的不算"""
         last: dict[str, bool] = {}
-        for call in self.calls:
-            last.pop(call.name, None)
-            last[call.name] = call.failed
+        for name, failed in self.calls:
+            last.pop(name, None)
+            last[name] = failed
         return [name for name, failed in last.items() if failed]
-
-    def executed_steps(self) -> list[ModelMessage]:
-        """
-        执行过的技能调用，写成模型的调用和技能的结果；模型半路出错时用它记历史，
-        免得下一轮模型以为没办过（比如提醒已经设上了又设一遍）
-        """
-        if not self.calls:
-            return []
-        return [
-            ModelResponse(parts=[ToolCallPart(c.name, c.args, tool_call_id=c.call_id) for c in self.calls]),
-            ModelRequest(parts=[ToolReturnPart(c.name, c.result, tool_call_id=c.call_id) for c in self.calls]),
-        ]
 
 
 async def execute_skill(name: str, args: dict, deps: AgentDeps) -> tuple[str, bool]:
@@ -166,8 +143,9 @@ class SkillToolset(AbstractToolset[AgentDeps]):
     async def get_tools(self, ctx: RunContext[AgentDeps]) -> dict[str, ToolsetTool[AgentDeps]]:
         deps = ctx.deps
         tools = {}
+        allowed = deps.allowed_skills()
         for name, schema in skill_registry.schemas().items():
-            if not check_permission(name, deps.access):
+            if name not in allowed:
                 continue
             tool_def = tool_definition(schema)
             if name == DYNAMIC_SKILL_RUNNER and deps.dynamic_hints():
@@ -183,10 +161,5 @@ class SkillToolset(AbstractToolset[AgentDeps]):
             LOG.warning("技能轮次已用完，模型还在调 %s，不执行", name)
             return ROUNDS_USED_UP
         result, failed = await execute_skill(name, tool_args, deps)
-        deps.calls.append(SkillCall(name, tool_args, ctx.tool_call_id or "", result, failed))
+        deps.calls.append((name, failed))
         return result
-
-
-def has_any_skill(access: dict) -> bool:
-    """这个人在这里有没有能用的技能"""
-    return any(check_permission(name, access) for name in skill_registry.names())

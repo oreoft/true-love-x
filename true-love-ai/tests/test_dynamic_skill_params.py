@@ -74,14 +74,16 @@ class QuotingTests(unittest.TestCase):
 class ValueFilterTests(unittest.TestCase):
     """A template may hand the value to another interpreter (bash -c, ssh, eval), so risky characters are refused"""
 
-    def test_shell_characters_quotes_and_newlines_are_refused(self):
-        for value in ("a;b", "a&b", "a|b", "`id`", "$(id)", "$HOME", "a>b", "a<b", "a\\b", "it's", 'say "hi"',
-                      "a\nb", "a\rb"):
+    def test_characters_that_could_start_a_new_command_are_refused(self):
+        for value in ("a;b", "a&b", "a|b", "`id`", "$(id)", "$HOME", "a>b", "a<b", "a\\b", "a\nb", "a\rb"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 dsm._build_command("bash -c 'echo {w}'", {"w": {}}, {"w": value})
 
     def test_a_nested_interpreter_gets_ordinary_values(self):
         self.assertEqual(shell("bash -c 'echo got-{w}'", "hello world"), "got-hello world\n")
+
+    def test_quotes_are_allowed_and_stay_literal_in_the_outer_shell(self):
+        self.assertEqual(shell("echo {w}", "McDonald's \"big\" mac"), "McDonald's \"big\" mac\n")
 
     def test_option_like_values_are_refused_but_negative_numbers_are_fine(self):
         with self.assertRaises(ValueError):

@@ -86,6 +86,7 @@ class SessionRepository:
     def append_turn(self, session_id: str, user_text: str, tools_json: Optional[str], reply: Optional[str]) -> None:
         """
         一轮对话一起写：用户的话、技能调用过程（有的话）、发出去的回复（有的话）
+        回复为空时历史里技能结果后面直接接下一条用户消息，pydantic_ai 会把它们并成一次请求，模型都接受
 
         一起写是为了同一个群里同时处理的两条消息不会交错成 用户A、用户B、技能A、回复A……，
         那样技能调用就不紧跟在提问后面，有的模型会拒收这样的历史

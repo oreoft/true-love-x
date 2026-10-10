@@ -23,10 +23,11 @@ _EXEC_TIMEOUT = 30
 _OUTPUT_LIMIT = 2000
 
 
-# 模型传来的参数值里不许有的字符：shell 元字符、引号、换行。
-# 值本身以环境变量交给 shell，外层 shell 不会解析它；但模板里要是再套一层解释器（bash -c '...{x}'、ssh、eval），
-# 值会在里面被重新解析，所以这些字符一律不收
-_UNSAFE_VALUE = re.compile(r"""[;&|`$()<>\\'"\n\r\x00]""")
+# 模型传来的参数值里不许有的字符：能拼出新命令的 shell 元字符和换行（改造前就拦 ;&|`$()<>\，漏了换行）。
+# 值本身以环境变量交给 shell，外层 shell 不会解析它；拦这些是给模板里再套一层解释器的情况
+# （bash -c '...{x}'、ssh、eval）兜底：值会在里面被重新解析，至少拼不出新命令。
+# 那种模板里值仍可能被空格拆成几个参数，写技能的人要自己注意
+_UNSAFE_VALUE = re.compile(r"[;&|`$()<>\\\n\r\x00]")
 _NUMBER = re.compile(r"-\d+(\.\d+)?")
 
 
@@ -42,7 +43,7 @@ def _build_command(command: str, param_defs: dict, overrides: dict) -> tuple[str
     for name, value in overrides.items():
         value = str(value)
         if _UNSAFE_VALUE.search(value):
-            raise ValueError(f"参数 '{name}' 的值包含不允许的字符（引号、换行或 ;&|`$()<>\\）")
+            raise ValueError(f"参数 '{name}' 的值包含不允许的字符（换行或 ;&|`$()<>\\）")
         if value.startswith("-") and not _NUMBER.fullmatch(value):
             raise ValueError(f"参数 '{name}' 不能以 - 开头")
         values[name] = value

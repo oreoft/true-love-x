@@ -129,10 +129,17 @@ class TurnStorageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([(r.type, r.content) for r in get_session_repo().load(SID)[1]],
                          [(MSG, "Alice：hi"), (MSG, "你好")])
 
-    async def test_an_unanswered_turn_keeps_only_what_the_user_said(self):
-        Session(SID).record_turn("Alice：[图片]", None, [call(), result("健身照")])
+    async def test_an_unanswered_turn_keeps_what_the_user_said_and_the_skills_that_ran(self):
+        session = Session(SID)
+        session.record_turn("Alice：[图片]", None, [call(), result("健身照")])
+        session.record_turn("Bob：刚才那图是啥", "健身照")
 
-        self.assertEqual([(r.type, r.role) for r in get_session_repo().load(SID)[1]], [(MSG, "user")])
+        self.assertEqual([(r.type, r.role) for r in get_session_repo().load(SID)[1]],
+                         [(MSG, "user"), (TOOLS, None), (MSG, "user"), (MSG, "assistant")])
+        # still a valid conversation: tool results followed by the next user message
+        self.assertEqual(kinds(session.history()[1])[2:], [("ModelRequest", ["ToolReturnPart"]),
+                                                         ("ModelRequest", ["UserPromptPart"]),
+                                                         ("ModelResponse", ["TextPart"])])
 
     async def test_two_turns_handled_at_the_same_time_do_not_interleave(self):
         a, b = Session(SID), Session(SID)
