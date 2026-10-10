@@ -27,6 +27,7 @@ dependencies = [
     "pillow>=12.2.0",
     # Papa John's ordering
     "pajohns>=0.1.0",
+    "pydantic-ai-slim[openai]>=2.55.0",
 ]
 
 [project.optional-dependencies]
@@ -55,6 +56,7 @@ true-love-common = { path = "../true-love-common", editable = true }
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = ["e2e: runs real tl-server and tl-ai processes (TL_E2E=0 skips them)"]
 
 [tool.ruff]
 line-length = 100
