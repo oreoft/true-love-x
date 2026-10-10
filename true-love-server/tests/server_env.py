@@ -26,7 +26,9 @@ _HOME = Path(tempfile.mkdtemp(prefix="tl-server-test-"))
 atexit.register(shutil.rmtree, _HOME, True)
 (_HOME / "config-dev.yaml").write_text(
     f'http_token: ["{TOKEN}"]\nalapi: {{token: "alapi"}}\nhttp: {{host: 127.0.0.1, port: 8088}}\n'
-    f'default_bot_id: "{DEFAULT_BOT_ID}"\n', encoding="utf-8")
+    f'default_bot_id: "{DEFAULT_BOT_ID}"\n'
+    'r2: {account_id: "acct", bucket: "relay", access_key_id: "key", secret_access_key: "secret"}\n',
+    encoding="utf-8")
 _previous = os.getcwd()
 os.environ.pop("APP_ENV", None)
 os.chdir(_HOME)
@@ -38,6 +40,10 @@ try:
     from true_love_server.services import ai_rate_limit, auto_ai_limit, bot_registry, scheduler_service
     from true_love_server.services.ai_client import business as ai_business
     from true_love_server.services.base_client import _client as base_http
+    from true_love_server.core import Config
+
+    # Config is read on first use; load the test config now, while the working directory is the test home
+    Config()
 finally:
     os.chdir(_previous)
 
