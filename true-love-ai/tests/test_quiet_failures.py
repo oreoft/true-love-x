@@ -3,7 +3,6 @@
 import asyncio
 import types
 import unittest
-from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, Mock, patch
 
 from true_love_common.http.client import HttpResult
@@ -13,7 +12,7 @@ from true_love_ai.agent import server_client
 from true_love_ai.agent.skill_registry import SkillFailed
 from true_love_ai.agent.skills import dynamic_skill_manage, profile_skill, search_skill, wechat_qr_skill
 from true_love_ai.api import data_routes
-from true_love_ai.core import background, session as session_module
+from true_love_ai.core import background
 from true_love_ai.memory import memory_manager
 from ai_db import memory_db
 
@@ -40,34 +39,6 @@ class BackgroundTaskTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(RuntimeError):
             background.spawn(coro, "nothing")
         self.assertIsNone(coro.cr_frame)
-
-
-class CompressCooldownTests(unittest.IsolatedAsyncioTestCase):
-    async def test_failed_compression_is_not_retried_on_every_message(self):
-        repo = Mock(count_messages=Mock(return_value=100),
-                    load=Mock(return_value=(None, [{"role": "user", "content": str(i)} for i in range(20)])))
-        compress_fn = AsyncMock(side_effect=RuntimeError("model down"))
-        session = session_module.Session("bot_a:room", "", compress_threshold=50, compress_keep_recent=10,
-                                         compress_fn=compress_fn)
-
-        with patch("true_love_ai.memory.session_repository.get_session_repo", return_value=repo), \
-                self.assertLogs("Session", level="ERROR"):
-            session.add_message("user", "1")
-            await asyncio.sleep(0.01)
-            session.add_message("user", "2")
-            await asyncio.sleep(0.01)
-        self.assertEqual(compress_fn.await_count, 1)
-        repo.compress.assert_not_called()
-
-        # 冷却过了再试，成功后正常写库
-        session._compress_retry_at = datetime.now() - timedelta(seconds=1)
-        compress_fn.side_effect = None
-        compress_fn.return_value = "摘要"
-        with patch("true_love_ai.memory.session_repository.get_session_repo", return_value=repo):
-            session.add_message("user", "3")
-            await asyncio.sleep(0.01)
-        repo.compress.assert_called_once_with("bot_a:room", "摘要", 10)
-        self.assertIsNone(session._compress_retry_at)
 
 
 class ProfileTests(unittest.IsolatedAsyncioTestCase):

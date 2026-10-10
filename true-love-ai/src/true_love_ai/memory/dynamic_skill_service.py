@@ -17,6 +17,8 @@ LOG = logging.getLogger("DynamicSkillService")
 
 # ID 格式：小写英文+数字+下划线，长度 2-63
 SKILL_ID_RE = re.compile(r'^[a-z0-9][a-z0-9_]{1,62}$')
+# 参数名：命令模板里写成 {参数名}，只能是普通的标识符，免得和模板里本来的花括号（awk '{print $1}'）混在一起
+PARAM_NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
 # 保存时拦截的危险命令模式
 _BLOCKED_CMD = re.compile(
@@ -54,16 +56,20 @@ def validate_command(command: str) -> str | None:
 
 
 def normalize_parameters(parameters) -> str | None:
-    """将 parameters 规范化为 JSON 字符串或 None；格式非法时抛 ValueError。"""
-    if isinstance(parameters, dict):
-        return json.dumps(parameters, ensure_ascii=False) if parameters else None
+    """将 parameters 规范化为 JSON 字符串或 None；不是 JSON 对象（比如 [] 或 null）、参数名不合法时抛 ValueError。"""
     if isinstance(parameters, str) and parameters.strip():
         try:
-            json.loads(parameters)
-            return parameters.strip()
+            parameters = json.loads(parameters)
         except json.JSONDecodeError:
             raise ValueError("parameters 必须是合法的 JSON 格式")
-    return None
+    elif parameters in (None, "", {}):
+        return None
+    if not isinstance(parameters, dict):
+        raise ValueError("parameters 必须是 JSON 对象，格式：{参数名: {default: 默认值, desc: 描述}}")
+    bad = [str(name) for name in parameters if not PARAM_NAME.fullmatch(str(name))]
+    if bad:
+        raise ValueError(f"参数名 {', '.join(bad)} 不合法，只能是字母、数字、下划线")
+    return json.dumps(parameters, ensure_ascii=False) if parameters else None
 
 
 def _to_dict(skill) -> dict:

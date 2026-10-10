@@ -6,8 +6,9 @@ Skill Registry
 每个 skill 是一个 async callable，接收 (params: dict, ctx: dict) → str。
 """
 
+import copy
 import logging
-from typing import Callable, Awaitable
+from typing import Awaitable, Callable
 
 LOG = logging.getLogger("SkillRegistry")
 
@@ -53,24 +54,15 @@ def register_skill(schema: dict):
     return decorator
 
 
-def get_all_tool_schemas(ctx: dict) -> list[dict]:
-    """当前这个人在这里能用的 skill tool schema 列表（供 LLM tools 参数使用）；ctx 的字段见 permission"""
-    import copy
-    from true_love_ai.agent.skills.permission import check_permission
-
-    schemas = []
+def schemas() -> dict[str, dict]:
+    """{技能名: 给模型看的 OpenAI function schema}，不含 notify、timeout；谁能用由 agent.tools 按权限点每一步现筛"""
+    result = {}
     for name, s in _skills.items():
-        if not check_permission(name, ctx):
-            continue
         schema = copy.deepcopy(s["schema"])
         schema.pop("notify", None)
         schema.pop("timeout", None)
-        params = schema.get("function", {}).get("parameters", {})
-        if isinstance(params.get("properties"), dict) and not params["properties"]:
-            params.pop("properties", None)
-            params.pop("required", None)
-        schemas.append(schema)
-    return schemas
+        result[name] = schema
+    return result
 
 
 def names() -> list[str]:

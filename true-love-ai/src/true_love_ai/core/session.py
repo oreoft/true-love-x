@@ -2,42 +2,123 @@
 # -*- coding: utf-8 -*-
 """
 会话管理模块
-Session 对象只持有元数据（session_id / system_prompt / TTL），
-消息和摘要全部走 SQLite，不在内存中缓存。
+
+Session 对象只持有元数据（session_id / TTL / 压缩状态），消息、技能调用过程和摘要都在 SQLite 里（见 session_repository），
+每次用的时候现读，转成 pydantic_ai 的消息交给模型。
 """
 import logging
 import threading
 from datetime import datetime, timedelta
-from typing import Optional, Callable, Awaitable
+from typing import Awaitable, Callable, Optional
+
+from pydantic_ai.messages import (
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+
 from true_love_ai.core.background import spawn
-from true_love_ai.core.db_engine import SessionLocal
-from true_love_ai.memory.dynamic_skill_repository import DynamicSkillRepository
-from true_love_ai.agent.skills.permission import check_permission
 from true_love_ai.core.config import get_config
-from true_love_ai.memory import persona_service
+from true_love_ai.memory.session_repository import MSG, TOOLS, StoredRow, get_session_repo
 
 LOG = logging.getLogger("Session")
 
 # 压缩失败后多久内不再重试，免得每来一条消息都调一次压缩模型
 COMPRESS_RETRY_COOLDOWN = timedelta(minutes=10)
+# 存进历史的技能结果最多这么长，免得一次网页搜索把之后每轮的上下文都撑大
+STORED_TOOL_RESULT_CHARS = 2000
 
 
-def _load_dynamic_skill_hints(access: dict) -> str:
-    """从 DB 读取当前用户在这里有权限的动态技能，返回注入 prompt 的文本；access 的字段见 permission"""
+def to_model_messages(rows: list[StoredRow]) -> list[ModelMessage]:
+    """库里的行 → 交给模型的历史；读不出来的技能过程跳过，不影响前后的对话"""
+    messages: list[ModelMessage] = []
+    for row in rows:
+        if row.type == MSG and row.role == "user":
+            messages.append(ModelRequest(parts=[UserPromptPart(content=row.content)]))
+        elif row.type == MSG:
+            messages.append(ModelResponse(parts=[TextPart(content=row.content)]))
+        elif row.type == TOOLS:
+            try:
+                messages.extend(ModelMessagesTypeAdapter.validate_json(row.content))
+            except Exception as e:
+                LOG.warning("技能调用记录读不出来，跳过: row=%s err=%s", row.id, e)
+    return messages
+
+
+def tool_steps_json(steps: list[ModelMessage]) -> Optional[str]:
+    """
+    一轮里调技能的过程（模型的 tool call 和技能的结果）存成 JSON；没有完整的调用过程返回 None
+
+    instructions 每次现算，不存；太长的技能结果截短。每个 tool call 都要有对应的结果，否则这段整个不存，
+    免得下次交给模型时缺了结果被拒。
+    """
+    kept: list[ModelMessage] = []
+    pending: set[str] = set()
+    for message in steps:
+        if isinstance(message, ModelResponse):
+            if not any(isinstance(p, ToolCallPart) for p in message.parts):
+                continue
+            pending |= {p.tool_call_id for p in message.parts if isinstance(p, ToolCallPart)}
+            kept.append(message)
+        elif isinstance(message, ModelRequest):
+            parts = []
+            for part in message.parts:
+                if isinstance(part, (ToolReturnPart, RetryPromptPart)) and part.tool_call_id in pending:
+                    pending.discard(part.tool_call_id)
+                    if isinstance(part, ToolReturnPart) and isinstance(part.content, str) \
+                            and len(part.content) > STORED_TOOL_RESULT_CHARS:
+                        part = ToolReturnPart(tool_name=part.tool_name, tool_call_id=part.tool_call_id,
+                                              content=part.content[:STORED_TOOL_RESULT_CHARS] + "…（已截断）")
+                    parts.append(part)
+            if parts:
+                kept.append(ModelRequest(parts=parts))
+    if not kept or pending:
+        return None
+    return ModelMessagesTypeAdapter.dump_json(kept).decode()
+
+
+def without_tool_steps(messages: list[ModelMessage], keep: frozenset[str] = frozenset()) -> list[ModelMessage]:
+    """
+    去掉历史里不在 keep 里的技能的调用和结果，说过的话都留着
+
+    这次给模型的工具定义只有 keep 这些：有的模型（比如 Claude）不接受历史里出现没定义的工具。
+    群里权限不同的人轮流说话时，别人调过、这个人用不了的技能就从这次的历史里拿掉；调用和结果按技能名一起去掉，不会配不上对。
+    """
+    kept: list[ModelMessage] = []
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            parts = [p for p in message.parts if not isinstance(p, ToolCallPart) or p.tool_name in keep]
+            if parts:
+                kept.append(ModelResponse(parts=parts))
+        else:
+            parts = [p for p in message.parts
+                     if not isinstance(p, (ToolReturnPart, RetryPromptPart)) or p.tool_name in keep]
+            if parts:
+                kept.append(ModelRequest(parts=parts))
+    return kept
+
+
+def _render_for_summary(row: StoredRow) -> list[str]:
+    if row.type == MSG:
+        return [f"{row.role}: {row.content[:800]}"]
+    lines = []
     try:
-
-        with SessionLocal() as db:
-            skills = DynamicSkillRepository(db).list_all()
-        if not skills:
-            return ""
-        visible = []
-        for s in skills:
-            if check_permission(s.id, access):
-                visible.append(f"- {s.id}（{s.name}）: {s.description}")
-        return "\n".join(visible)
-    except Exception as e:
-        LOG.warning("加载动态技能列表失败: %s", e, exc_info=True)
-        return ""
+        steps = ModelMessagesTypeAdapter.validate_json(row.content)
+    except Exception:
+        return lines
+    for message in steps:
+        for part in message.parts:
+            if isinstance(part, ToolCallPart):
+                lines.append(f"assistant 调用技能 {part.tool_name}({part.args_as_json_str()[:200]})")
+            elif isinstance(part, ToolReturnPart):
+                lines.append(f"技能 {part.tool_name} 返回: {str(part.content)[:300]}")
+    return lines
 
 
 class Session:
@@ -46,14 +127,12 @@ class Session:
     def __init__(
             self,
             session_id: str,
-            system_prompt: str,
             ttl_seconds: int = 86400,
             compress_threshold: int = 50,
             compress_keep_recent: int = 10,
             compress_fn: Optional[Callable[[list[dict]], Awaitable[str]]] = None,
     ):
         self.session_id = session_id
-        self.system_prompt = system_prompt
         self.ttl = timedelta(seconds=ttl_seconds)
         self._compress_threshold = compress_threshold
         self._compress_keep_recent = compress_keep_recent
@@ -68,36 +147,64 @@ class Session:
     def is_expired(self) -> bool:
         return datetime.now() > self.updated_at + self.ttl
 
-    def add_message(self, role: str, content: str):
+    def history(self) -> tuple[Optional[str], list[ModelMessage]]:
+        """(摘要, 之前的对话)，交给模型用"""
         self.updated_at = datetime.now()
+        summary, rows = get_session_repo().load(self.session_id)
+        return summary, to_model_messages(rows)
 
-        from true_love_ai.memory.session_repository import get_session_repo
-        repo = get_session_repo()
-        repo.append_message(self.session_id, role, content)
+    def record_turn(self, user_text: str, reply: Optional[str] = None,
+                    tool_steps: Optional[list[ModelMessage]] = None) -> None:
+        """
+        记下这一轮：用户的话、调技能的过程、真发出去了的回复（没发或没发成的传 None）
 
-        count = repo.count_messages(self.session_id)
-        if count >= self._compress_threshold and self._should_compress():
-            try:
-                spawn(self._compress(), f"compress:{self.session_id}")
-            except RuntimeError:
-                LOG.warning("Session %s 不在事件循环里，这次跳过压缩", self.session_id)
+        没发回复也记技能过程：技能可能已经办了事（比如设了提醒），下一轮模型得知道；
+        自动触发时看过的图、读过的文件，之后有人问起来也用得上。
+        tool_steps 可以直接给这一轮 pydantic_ai 的全部新消息，只挑出完整的技能调用和结果存
+        """
+        self.updated_at = datetime.now()
+        steps_json = tool_steps_json(tool_steps or [])
+        get_session_repo().append_turn(self.session_id, user_text, steps_json, reply)
+        self._maybe_compress()
+
+    def _maybe_compress(self) -> None:
+        if not self._should_compress():
+            return
+        if get_session_repo().count_messages(self.session_id) < self._compress_threshold:
+            return
+        try:
+            spawn(self._compress(), f"compress:{self.session_id}")
+        except RuntimeError:
+            LOG.warning("Session %s 不在事件循环里，这次跳过压缩", self.session_id)
 
     def _should_compress(self) -> bool:
         if self._compressing or not self._compress_fn:
             return False
         return self._compress_retry_at is None or datetime.now() >= self._compress_retry_at
 
+    @staticmethod
+    def _cut(rows: list[StoredRow], keep: int) -> int:
+        """
+        要压掉的行数：最近 keep 条 msg 留着，往前退到一条用户消息开头，
+        让留下的历史从一轮的开头开始，不会只剩技能调用过程或回复
+        """
+        msg_idx = [i for i, r in enumerate(rows) if r.type == MSG]
+        if len(msg_idx) <= keep:
+            return 0
+        cut = msg_idx[-keep] if keep > 0 else len(rows)
+        while cut < len(rows) and not (rows[cut].type == MSG and rows[cut].role == "user"):
+            cut += 1
+        return cut
+
     async def _compress(self):
         if self._compressing or not self._compress_fn:
             return
         self._compressing = True
         try:
-            from true_love_ai.memory.session_repository import get_session_repo
             repo = get_session_repo()
-            summary, all_msgs = repo.load(self.session_id)
-
-            keep = self._compress_keep_recent
-            to_compress = all_msgs[:-keep]
+            summary, rows = repo.load(self.session_id)
+            cut = self._cut(rows, self._compress_keep_recent)
+            to_compress = rows[:cut]
             if not to_compress:
                 return
 
@@ -105,8 +212,8 @@ class Session:
             if summary:
                 lines.append(f"\n【已有摘要】\n{summary}")
             lines.append("\n【需压缩的对话记录】")
-            for m in to_compress:
-                lines.append(f"{m['role']}: {m['content'][:800]}")
+            for row in to_compress:
+                lines.extend(_render_for_summary(row))
 
             new_summary = await self._compress_fn(
                 [{"role": "user", "content": "\n".join(lines)}]
@@ -114,88 +221,15 @@ class Session:
             if not (new_summary or "").strip():
                 raise ValueError("压缩模型返回了空摘要")
 
-            repo.compress(self.session_id, new_summary, keep)
+            # 只删被摘要过的那些行；压缩这段时间新来的消息 id 都更大，不受影响
+            deleted = repo.compress(self.session_id, new_summary, to_compress[-1].id)
             self._compress_retry_at = None
-            LOG.info("Session %s 压缩完成: %d → %d msgs", self.session_id, len(all_msgs), keep)
+            LOG.info("Session %s 压缩完成: 压掉 %d 行，保留 %d 行", self.session_id, deleted, len(rows) - cut)
         except Exception as e:
             self._compress_retry_at = datetime.now() + COMPRESS_RETRY_COOLDOWN
             LOG.exception("Session %s 压缩失败，%s 内不再重试: %s", self.session_id, COMPRESS_RETRY_COOLDOWN, e)
         finally:
             self._compressing = False
-
-    def get_current_time_context(self) -> str:
-        import re
-        from datetime import datetime, timezone
-        from zoneinfo import ZoneInfo
-
-        tz_str = "Asia/Shanghai"
-        if self.system_prompt:
-            match = re.search(r"时区[：:]\s*([^\s\|]+)", self.system_prompt)
-            if match:
-                tz_str = match.group(1).strip()
-
-        try:
-            tz = ZoneInfo(tz_str)
-        except Exception:
-            tz_str = "Asia/Shanghai"
-            tz = ZoneInfo(tz_str)
-
-        now_utc = datetime.now(timezone.utc)
-        now_local = now_utc.astimezone(tz)
-
-        return (
-            f"系统当前世界标准时间(UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')}。\n"
-            f"该用户当前当地时间(时区={tz_str}): {now_local.strftime('%Y-%m-%d %H:%M:%S')}。\n"
-            f"【极其重要】：如果用户要求你进行「x分钟后」、「明天几点」等时间推算，请**直接以系统告诉你的【该用户当地时间】为起点**进行相加减。\n"
-            f"计算出的结果绝对不要再额外进行时差加减偏移！最后务必将你的结果转化为标准 ISO-8601 带时区的格式输出（例如：2026-04-13T10:30:00-05:00）。"
-        )
-
-    @staticmethod
-    def _cacheable(text: str) -> list[dict]:
-        """把文本包装成带 cache_control 的 content block（支持 Anthropic prompt caching）"""
-        return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}]
-
-    def get_messages_for_llm(self, access: dict) -> list[dict]:
-        """access：谁在哪里问的（platform、bot_id、sender_id、is_group、chat），决定列出哪些技能"""
-        from true_love_ai.memory.session_repository import get_session_repo
-        from true_love_ai.agent.skill_registry import get_all_tool_schemas
-
-        summary, messages = get_session_repo().load(self.session_id)
-
-        result = []
-
-        if self.system_prompt:
-            result.append({"role": "system", "content": self._cacheable(self.system_prompt)})
-
-        if summary:
-            result.append({
-                "role": "system",
-                "content": self._cacheable(
-                    f"【早期对话摘要】以下是本次会话早期对话的压缩记录，供参考上下文：\n{summary}"
-                ),
-            })
-
-        skills = get_all_tool_schemas(access)
-        skill_text = "\n".join(f"- {s['function']['name']}: {s['function']['description']}" for s in skills)
-
-        dynamic_skill_text = _load_dynamic_skill_hints(access)
-        dynamic_section = (
-            f"\n\n【动态技能列表】（通过 skill_run 执行，通过 skill_save 新增）\n{dynamic_skill_text}"
-            if dynamic_skill_text else ""
-        )
-
-        time_hint = (
-            f"{self.get_current_time_context()}\n"
-            f"你已接入多模态 Agent 系统，能够执行特定的技能任务。\n"
-            f"【重要】在群聊中，当用户使用「这个/那个/他说的/之前提到的/刚才讲的」等指代词，"
-            f"且当前对话上下文中找不到对应内容时，必须先调用 fetch_group_context 补充群聊记录后再回答，不得猜测或编造。\n"
-            f"如果你想知道你具备哪些拓展技能能力，以下是当前加载的专属技能列表：\n{skill_text}"
-            f"{dynamic_section}\n"
-        )
-        result.append({"role": "system", "content": time_hint})
-
-        result.extend(messages)
-        return result
 
 
 class SessionManager:
@@ -220,42 +254,20 @@ class SessionManager:
 
         return _compress_fn
 
-    def get_or_create(
-            self,
-            session_id: str,
-            user_ctx: Optional[str] = None,
-            bot_id: str = "",
-            chat: str = "",
-            bot_name: str = "",
-    ) -> Session:
-        """
-        Args:
-            session_id: 会话 ID，"bot_id:群或人"
-            user_ctx: 发送者的画像，拼进 system prompt
-            bot_id / chat: 选人设用：这个机器人里的群或私聊对象
-            bot_name: 机器人的昵称，换掉人设里的 {name}
-        """
-        # 人设每次现查，tl-admin 改了下一条消息就生效
-        prompt = persona_service.resolve(bot_id, chat, bot_name).prompt
-        if user_ctx:
-            prompt = f"{prompt}\n\n## 关于发送者的已知信息\n{user_ctx}"
-        prompt += "\n\n## 回复格式\n微信不支持Markdown渲染，回复只能用纯文本和换行符，不能出现**加粗**、#标题、`代码块`、- 列表、> 引用等任何Markdown符号。"
-
+    def get_or_create(self, session_id: str) -> Session:
+        """session_id: 会话 ID，"bot_id:群或人" """
         with self._lock:
             self._cleanup_expired()
             session = self._sessions.get(session_id)
             if session is None:
                 session = self._sessions[session_id] = Session(
                     session_id=session_id,
-                    system_prompt=prompt,
                     ttl_seconds=self.ttl_seconds,
                     compress_threshold=self.compress_threshold,
                     compress_keep_recent=self.compress_keep_recent,
                     compress_fn=self._make_compress_fn(),
                 )
-                LOG.debug("创建新会话: %s, has_user_ctx=%s", session_id, bool(user_ctx))
-            else:
-                session.system_prompt = prompt
+                LOG.debug("创建新会话: %s", session_id)
             return session
 
     def _cleanup_expired(self):

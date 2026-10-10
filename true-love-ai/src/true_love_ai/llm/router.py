@@ -1,11 +1,14 @@
 #! /usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""LLM 路由模块：通过 OpenAI SDK 调用 LiteLLM proxy，模型由 ModelRegistry 统一管理"""
-import json
+"""LLM 路由模块：通过 LiteLLM proxy 调模型，模型由 ModelRegistry 统一管理；agent 用 pydantic_ai，单次调用直接用 OpenAI SDK"""
 import logging
 from typing import Optional
 
 from openai import AsyncOpenAI
+from pydantic_ai.models import Model
+from pydantic_ai.models.fallback import FallbackModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.litellm import LiteLLMProvider
 
 from true_love_ai.core.model_registry import get_model_registry
 
@@ -15,6 +18,21 @@ _openai_client: Optional[AsyncOpenAI] = None
 
 # 只约束 agent 对话；共用 client 的生图请求可能更慢，不能套这个值
 AGENT_LLM_TIMEOUT_SECONDS = 120
+# 工具定义原样发给 LiteLLM：pydantic_ai 默认会按模型改写 JSON schema（给无参数的工具补上空的 properties 等），
+# 技能 schema 是按改造前直接发给模型的样子写的
+_AGENT_MODEL_PROFILE = {"json_schema_transformer": None}
+# Claude 不会自动缓存前缀，要显式标 cache_control；让 LiteLLM 给 system（人设、规则、摘要）打上。
+# OpenAI、Gemini 自动缓存前缀，不加
+_CACHE_SYSTEM_PROMPT = {"extra_body": {"cache_control_injection_points": [{"location": "message", "role": "system"}]}}
+
+
+def _needs_cache_control(model_name: str) -> bool:
+    return "claude" in model_name.lower() or model_name.startswith("anthropic/")
+
+
+def _agent_chat_model(model_name: str, provider: LiteLLMProvider) -> OpenAIChatModel:
+    settings = _CACHE_SYSTEM_PROMPT if _needs_cache_control(model_name) else None
+    return OpenAIChatModel(model_name, provider=provider, profile=_AGENT_MODEL_PROFILE, settings=settings)
 
 
 def get_openai_client() -> AsyncOpenAI:
@@ -27,30 +45,6 @@ def get_openai_client() -> AsyncOpenAI:
             api_key=cfg.platform_key.litellm_api_key,
         )
     return _openai_client
-
-
-def _parse_tool_call(tc) -> dict:
-    """
-    把模型的 tool call 转成 {id, name, arguments}
-
-    参数不是合法的 JSON 对象时不拿空参数去执行，带上 arguments_error，AgentLoop 把它当技能结果回给模型让它重来。
-    """
-    raw = tc.function.arguments or ""
-    call = {"id": tc.id, "name": tc.function.name, "arguments": {}}
-    if not raw.strip():
-        return call
-    try:
-        args = json.loads(raw)
-    except ValueError as e:
-        error = f"参数不是合法的 JSON: {e}"
-    else:
-        if isinstance(args, dict):
-            call["arguments"] = args
-            return call
-        error = f"参数应该是 JSON 对象，收到的是 {type(args).__name__}"
-    LOG.warning("tool %s 的参数解析失败: %s arguments=%s", tc.function.name, error, raw[:200])
-    call["arguments_error"] = error
-    return call
 
 
 class LLMRouter:
@@ -70,28 +64,22 @@ class LLMRouter:
         response = await client.chat.completions.create(model=resolved, messages=messages, **kwargs)
         return response.choices[0].message.content
 
-    async def chat_for_agent(
-            self,
-            messages: list[dict],
-            tools: list[dict],
-            model: Optional[str] = None,
-    ) -> tuple[str, list | None]:
-        resolved = model or self._model("chat")
-        LOG.info("agent: model=%s tools=%d msgs=%d", resolved, len(tools), len(messages))
-        # SDK 默认 600s 超时 + 2 次重试，LLM 卡住时用户要等半小时才收到兜底回复
+    def agent_model(self) -> Model:
+        """
+        agent 用的模型：主力加备用（有配的话），主力报错或连不上时自动换备用再试
+
+        走同一个 LiteLLM proxy；pydantic_ai 按模型名前缀（openai/、gemini/…）选对应的兼容处理。
+        SDK 默认 600s 超时 + 2 次重试，LLM 卡住时用户要等半小时才收到兜底回复，这里收紧
+        """
         client = get_openai_client().with_options(timeout=AGENT_LLM_TIMEOUT_SECONDS, max_retries=1)
-        response = await client.chat.completions.create(
-            model=resolved,
-            messages=messages,
-            tools=tools or None,
-            tool_choice="auto" if tools else None,
-        )
-        message = response.choices[0].message
-
-        if message.tool_calls:
-            return "tool_calls", [_parse_tool_call(tc) for tc in message.tool_calls]
-
-        return "text", message.content or ""
+        provider = LiteLLMProvider(openai_client=client)
+        primary_name = self._model("chat")
+        fallback_name = self._model("chat", "fallback")
+        primary = _agent_chat_model(primary_name, provider)
+        LOG.info("agent: model=%s fallback=%s", primary_name, fallback_name or "-")
+        if not fallback_name or fallback_name == primary_name:
+            return primary
+        return FallbackModel(primary, _agent_chat_model(fallback_name, provider))
 
     async def vision(
             self,

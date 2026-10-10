@@ -20,6 +20,12 @@ dependencies = [
     "qrcode>=8.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "httpx>=0.28.0",  # fastapi TestClient
+]
+
 [project.scripts]
 true-love-server = "true_love_server.main:main"
 
@@ -38,3 +44,9 @@ sources = ["src"]
 
 [tool.pyright]
 extraPaths = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+# a test whose coroutine never ran must fail, not pass silently
+filterwarnings = ["error::RuntimeWarning", "error::pytest.PytestUnraisableExceptionWarning"]

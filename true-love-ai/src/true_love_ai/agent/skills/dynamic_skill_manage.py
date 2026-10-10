@@ -9,7 +9,9 @@ skill_run:  执行已保存的动态技能
 import asyncio
 import json
 import logging
+import os
 import re
+import signal
 
 from true_love_ai.agent.skill_registry import SkillFailed, register_skill
 from true_love_ai.agent.skills.permission import DENIED_TEXT, check_permission
@@ -18,25 +20,83 @@ from true_love_ai.memory import skill_access_service
 
 LOG = logging.getLogger("DynamicSkillManage")
 
-# 参数值中禁止的 shell 元字符（防止命令注入，仅在执行时校验）
-_UNSAFE_PARAM = re.compile(r'[;&|`$()<>\\]')
-
 _EXEC_TIMEOUT = 30
 _OUTPUT_LIMIT = 2000
 
 
-def _substitute_params(command: str, param_defs: dict, overrides: dict) -> str:
-    """将命令模板中的 {name} 替换为实际参数值"""
-    merged = {k: v.get("default", "") for k, v in param_defs.items()}
-    for k, v in overrides.items():
-        if _UNSAFE_PARAM.search(str(v)):
-            raise ValueError(f"参数 '{k}' 值包含非法字符，已拒绝执行")
-        merged[k] = str(v)
+# 模型传来的参数值里不许有的字符：能拼出新命令的 shell 元字符和换行（改造前就拦 ;&|`$()<>\，漏了换行）。
+# 值本身以环境变量交给 shell，外层 shell 不会解析它；拦这些是给模板里再套一层解释器的情况
+# （bash -c '...{x}'、ssh、eval）兜底：值会在里面被重新解析，至少拼不出新命令。
+# 那种模板里值仍可能被空格拆成几个参数，写技能的人要自己注意
+_UNSAFE_VALUE = re.compile(r"[;&|`$()<>\\\n\r\x00]")
+_NUMBER = re.compile(r"-\d+(\.\d+)?")
 
-    result = command
-    for k, v in merged.items():
-        result = re.sub(r'\{' + re.escape(k) + r'\}', v, result)
-    return result
+
+def _build_command(command: str, param_defs: dict, overrides: dict) -> tuple[str, dict[str, str]]:
+    """
+    命令模板里的 {name} 换成对环境变量的引用，参数值放进环境变量：返回 (命令, 环境变量)
+
+    参数值不拼进命令文本，换行、引号、$()、空格都不会被外层 shell 当成命令或拆成多个参数。
+    模型传来的值另外按 _UNSAFE_VALUE 拦一遍；以 - 开头的值（负数除外）会被命令当成选项（比如 curl -o 写文件），也拒绝。
+    默认值是保存技能的人写的，不拦。
+
+    参数名也要管：模型给的名字会被拿去匹配模板里的 {名字}，不加限制就能把模板里本来的花括号
+    （比如 awk '{print $1}'）换成自己的值。名字只能是普通的标识符（保存时也这样查）；定义了参数的技能
+    只认定义过的名字。老技能没定义参数、模板里直接写 {package}，照样能传。
+    已知没法防的：没定义参数的老技能，模板里本来就有 {print} 这种标识符写的花括号，仍会被同名参数换掉，
+    这种技能重新保存一次、写上参数定义就好。Raises: ValueError
+    """
+    if not isinstance(param_defs, dict):
+        raise ValueError("这个技能保存的参数定义不是对象，请重新保存技能")
+    values = {k: str(v.get("default", "")) if isinstance(v, dict) else "" for k, v in param_defs.items()}
+    for name, value in overrides.items():
+        name = str(name)
+        if not _ss.PARAM_NAME.fullmatch(name):
+            raise ValueError(f"参数名 '{name}' 不合法，只能是字母、数字、下划线")
+        if param_defs and name not in param_defs:
+            raise ValueError(f"没有参数 '{name}'，可用的参数：{', '.join(param_defs)}")
+        value = str(value)
+        if _UNSAFE_VALUE.search(value):
+            raise ValueError(f"参数 '{name}' 的值包含不允许的字符（换行或 ;&|`$()<>\\）")
+        if value.startswith("-") and not _NUMBER.fullmatch(value):
+            raise ValueError(f"参数 '{name}' 不能以 - 开头")
+        values[name] = value
+    env: dict[str, str] = {}
+    var_of: dict[str, str] = {}
+    for i, (name, value) in enumerate(values.items()):
+        var_of[name] = f"TL_ARG_{i}"
+        env[var_of[name]] = value
+    return _reference_vars(command, var_of), env
+
+
+def _reference_vars(command: str, var_of: dict[str, str]) -> str:
+    """
+    把模板里的 {name} 换成 ${变量}，按它在 shell 里所处的引号决定怎么写，保证展开后还是一个参数、不再被解析：
+    引号外写 "${V}"，双引号里写 ${V}，单引号里先关掉单引号再写 "${V}" 再打开（'a{x}b' → 'a'"${V}"'b'）
+    """
+    if not var_of:
+        return command
+    placeholder = re.compile("|".join(r"\{%s\}" % re.escape(name) for name in var_of))
+    out: list[str] = []
+    quote = ""
+    i = 0
+    while i < len(command):
+        m = placeholder.match(command, i)
+        if m:
+            ref = "${%s}" % var_of[m.group()[1:-1]]
+            out.append({"": f'"{ref}"', '"': ref, "'": f"'\"{ref}\"'"}[quote])
+            i = m.end()
+            continue
+        ch = command[i]
+        if ch == "\\" and quote != "'":
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if ch in "'\"" and quote in ("", ch):
+            quote = "" if quote else ch
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 @register_skill({
@@ -155,18 +215,22 @@ async def skill_run(params: dict, ctx: dict) -> str:
 
     param_defs = json.loads(skill["parameters"]) if skill["parameters"] else {}
     try:
-        command = _substitute_params(skill["command"], param_defs, overrides)
+        command, args_env = _build_command(skill["command"], param_defs, overrides)
     except ValueError as e:
         return f"参数错误：{e}"
 
-    LOG.info("执行动态技能: id=%s command=%s", skill_id, command[:200])
+    LOG.info("执行动态技能: id=%s command=%s args=%s", skill_id, command[:200], str(args_env)[:200])
 
+    proc = None
     try:
+        # 单独一个进程组：超时时连 shell 起的子进程一起杀掉，只杀 shell 的话子进程会留下来
         proc = await asyncio.wait_for(
             asyncio.create_subprocess_shell(
                 command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                env={**os.environ, **args_env},
+                start_new_session=True,
             ),
             timeout=5,
         )
@@ -175,6 +239,9 @@ async def skill_run(params: dict, ctx: dict) -> str:
         raise SkillFailed(f"技能「{skill['name']}」执行超时（>{_EXEC_TIMEOUT}s）") from e
     except Exception as e:
         raise SkillFailed(f"执行失败：{e}") from e
+    finally:
+        # 超时、出错、被取消（比如停服）都要杀；正常跑完的进程已经结束，_kill 什么都不做
+        await _kill(proc)
 
     output = stdout.decode("utf-8", errors="replace").strip()
     if proc.returncode != 0:
@@ -188,3 +255,14 @@ async def skill_run(params: dict, ctx: dict) -> str:
     if len(output) > _OUTPUT_LIMIT:
         output = output[:_OUTPUT_LIMIT] + f"\n...（输出已截断，共 {len(output)} 字符）"
     return output
+
+
+async def _kill(proc) -> None:
+    """杀掉技能命令的整个进程组并等它退出；进程已经结束了就什么都不做"""
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+    await proc.wait()

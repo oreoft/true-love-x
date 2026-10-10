@@ -1,7 +1,7 @@
 """The daily push sends today's pictures from the bot it belongs to, downloading them first when they are missing."""
 
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from server_env import ServerCase
 from true_love_server.jobs import job_process
@@ -13,7 +13,15 @@ class PushTests(ServerCase):
         self.base = self.register("wxid_ser")
         self.pictures = set()
         self.downloaded = []
+        self.uploaded = []
+
+        async def upload(cfg, path, prefix):
+            self.uploaded.append((path, prefix))
+            return f"https://r2.test/{prefix}/{path}?X-Amz-Signature=sig"
+
+        self.upload = AsyncMock(side_effect=upload)
         for patcher in (
+            patch.object(job_process.r2, "upload", self.upload),
             patch.object(job_process.time, "sleep"),
             patch.object(job_process, "fetch_data", return_value=""),
             patch.object(job_process, "check_image_openable", lambda path: path.split("/")[0] in self.pictures),
@@ -42,12 +50,14 @@ class PushTests(ServerCase):
         self.assertEqual(len(self.files()), 2)
         self.assertTrue(all(url.startswith(self.base) for url, _ in self.bases.sent()))
 
-    def test_pictures_are_offered_from_this_server(self):
+    def test_pictures_go_through_r2_and_base_gets_the_links(self):
         job_process.notice_moyu_schedule("wxid_ser", "委员会")
 
-        urls = [payload["url"] for payload in self.files()]
-        self.assertTrue(urls[0].startswith("http://localhost:8078/media/moyu-jpg/"), urls)
-        self.assertTrue(urls[1].startswith("http://localhost:8078/media/zaobao-jpg/"), urls)
+        today = job_process.get_current_date()
+        self.assertEqual(self.uploaded, [(f"moyu-jpg/{today}.jpg", "server"), (f"zaobao-jpg/{today}.jpg", "server")])
+        self.assertEqual([payload["url"] for payload in self.files()],
+                         [f"https://r2.test/server/moyu-jpg/{today}.jpg?X-Amz-Signature=sig",
+                          f"https://r2.test/server/zaobao-jpg/{today}.jpg?X-Amz-Signature=sig"])
 
     def test_us_push_uses_its_own_greeting(self):
         job_process.notice_usa_moyu_schedule("wxid_ser", "湾区群")
@@ -70,7 +80,7 @@ class PushTests(ServerCase):
         self.assertTrue(any("WARNING" in line and "moyu-jpg" in line for line in logs.output))
 
         self.assertEqual(len(self.texts()), 1)
-        self.assertEqual([payload["url"].split("/media/")[1].split("/")[0] for payload in self.files()], ["zaobao-jpg"])
+        self.assertEqual([payload["url"].split("/server/")[1].split("/")[0] for payload in self.files()], ["zaobao-jpg"])
 
     def test_push_that_base_rejects_is_a_failure(self):
         self.bases.reply(f"{self.base}/send/text", {"code": 102, "message": "WeChat offline"})
@@ -88,6 +98,15 @@ class PushTests(ServerCase):
             job_process.notice_moyu_schedule("wxid_ser", "委员会")
 
         self.assertEqual(len(self.texts()), 1)
+
+    def test_picture_that_cannot_be_uploaded_is_a_failure_and_the_other_still_goes(self):
+        self.upload.side_effect = [RuntimeError("R2 down"), "https://r2.test/server/zaobao.jpg"]
+
+        with self.assertLogs("JobProcess", level="ERROR"), self.assertRaisesRegex(RuntimeError, "上传 R2 失败"):
+            job_process.notice_moyu_schedule("wxid_ser", "委员会")
+
+        self.assertEqual(len(self.texts()), 1)
+        self.assertEqual([payload["url"] for payload in self.files()], ["https://r2.test/server/zaobao.jpg"])
 
 
 if __name__ == "__main__":

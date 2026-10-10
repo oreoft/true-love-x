@@ -1,5 +1,6 @@
 """Images and files carry a request for the model; the user's own words win when the platform lets them write any."""
 
+import asyncio
 import unittest
 
 from true_love_common.chat_msg import ChatMsg, FileMsg, ImageMsg, ResourceRef
@@ -9,7 +10,7 @@ from true_love_ai.agent import agent_loop
 
 def build(**fields):
     loop = agent_loop.AgentLoop.__new__(agent_loop.AgentLoop)
-    return loop._build_user_content(ChatMsg(**fields))
+    return asyncio.run(loop._build_user_content(ChatMsg(**fields)))
 
 
 def image(content):

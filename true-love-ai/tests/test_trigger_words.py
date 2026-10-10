@@ -1,5 +1,6 @@
 """The words that called the bot are not part of the question; base says which words those were."""
 
+import asyncio
 import unittest
 
 from true_love_common.chat_msg import ChatMsg
@@ -9,7 +10,7 @@ from true_love_ai.agent.agent_loop import AgentLoop
 
 def question(content, mention=""):
     loop = AgentLoop.__new__(AgentLoop)
-    return loop._build_user_content(ChatMsg(msg_type="text", content=content, mention=mention))
+    return asyncio.run(loop._build_user_content(ChatMsg(msg_type="text", content=content, mention=mention)))
 
 
 class TriggerWordTests(unittest.TestCase):

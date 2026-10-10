@@ -62,13 +62,19 @@ class SendTests(ServerCase):
 
         self.assertIn("WeChat offline", response["message"])
 
-    def test_generated_file_is_handed_to_base_as_a_url_on_ai(self):
-        self.post("/action/send-file", bot_id="wxid_m8s", receiver="群A", path="gen_img/a.jpg")
+    def test_generated_file_link_is_handed_to_base_as_is(self):
+        link = "https://r2.test/ai/20261010/abc/a.jpg?X-Amz-Signature=sig"
+        response = self.post("/action/send-file", bot_id="wxid_m8s", receiver="群A", path=link)
 
-        [(url, payload)] = self.bases.sent()
-        self.assertEqual(url, f"{self.m8s}/send/file")
-        self.assertEqual(payload["sendReceiver"], "群A")
-        self.assertTrue(payload["url"].endswith("/media/gen_img/a.jpg"))
+        self.assertEqual(response["code"], 0, response)
+        self.assertEqual(self.bases.sent(), [(f"{self.m8s}/send/file", {"url": link, "sendReceiver": "群A"})])
+
+    def test_a_file_that_is_not_a_link_is_refused(self):
+        """AI uploads its files to R2 first; a local path would point at a machine base cannot reach"""
+        response = self.post("/action/send-file", bot_id="wxid_m8s", receiver="群A", path="gen_img/a.jpg")
+
+        self.assertNotEqual(response["code"], 0)
+        self.assertEqual(self.bases.sent(), [])
 
     def test_token_is_required(self):
         self.assertNotEqual(self.post("/action/send", token="wrong", bot_id="wxid_m8s", receiver="a", content="b")["code"], 0)
